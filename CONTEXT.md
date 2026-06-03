@@ -180,6 +180,10 @@ _Avoid_: init command, manual file scaffolding
 A First-Start Bootstrap behavior where generated configuration includes short comments for user-editable settings.
 _Avoid_: opaque default config, verbose manual
 
+**Start Guidance**:
+A start-time user-facing output behavior where successful start output points first to the editable Explicit Configuration and Domain List, and shows the Proxy Listener only when Manual Proxy Mode makes it directly actionable.
+_Avoid_: listener-first start output, PAC listener summary, control listener summary
+
 **Pending Lifecycle Change**:
 A lifecycle setting change detected while the gateway is running that is reported to the user but not applied automatically.
 _Avoid_: surprise permission prompt, implicit restart

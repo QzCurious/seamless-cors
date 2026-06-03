@@ -45,14 +45,20 @@ func StartWithContext(ctx context.Context, stdout io.Writer, overrides config.Ov
 	if err != nil {
 		return err
 	}
+	writeStartGuidance(stdout, loaded)
+	return runtime.Serve(ctx)
+}
+
+func writeStartGuidance(stdout io.Writer, loaded config.LoadResult) {
 	fmt.Fprintf(stdout, "Transparent CORS Gateway running\n")
-	fmt.Fprintf(stdout, "proxy-listen: %s\n", loaded.Config.ProxyListen)
-	fmt.Fprintf(stdout, "pac-listen: %s\n", loaded.Config.PACListen)
-	fmt.Fprintf(stdout, "control-listen: %s\n", loaded.Config.ControlListen)
+	fmt.Fprintf(stdout, "config: %s\n", loaded.ConfigPath)
+	fmt.Fprintf(stdout, "domain-list: %s\n", loaded.DomainPath)
+	if !loaded.Config.ManagedSystemProxy {
+		fmt.Fprintf(stdout, "proxy-listen: %s\n", loaded.Config.ProxyListen)
+	}
 	if len(loaded.OverrideNames) > 0 {
 		fmt.Fprintf(stdout, "one-run overrides: %s\n", strings.Join(loaded.OverrideNames, ", "))
 	}
-	return runtime.Serve(ctx)
 }
 
 type Runtime struct {

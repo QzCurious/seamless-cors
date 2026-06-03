@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"cors-vpn/internal/config"
@@ -31,6 +32,59 @@ func (f *fakeAdapter) TrustCA([]byte) error {
 func (f *fakeAdapter) RemoveCA() error {
 	f.removed++
 	return nil
+}
+
+func TestStartGuidanceShowsEditableFilesForManagedSystemProxy(t *testing.T) {
+	cfg := config.Default()
+	cfg.ManagedSystemProxy = true
+	var out bytes.Buffer
+
+	writeStartGuidance(&out, config.LoadResult{
+		Config:     cfg,
+		ConfigPath: "/Users/example/.cors-gateway/config.yaml",
+		DomainPath: "/Users/example/.cors-gateway/domains.txt",
+	})
+
+	got := out.String()
+	want := "Transparent CORS Gateway running\n" +
+		"config: /Users/example/.cors-gateway/config.yaml\n" +
+		"domain-list: /Users/example/.cors-gateway/domains.txt\n"
+	if got != want {
+		t.Fatalf("start guidance = %q", got)
+	}
+	for _, unwanted := range []string{"proxy-listen:", "pac-listen:", "control-listen:"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("start guidance included %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestStartGuidanceShowsProxyListenerForManualProxyMode(t *testing.T) {
+	cfg := config.Default()
+	cfg.ManagedSystemProxy = false
+	var out bytes.Buffer
+
+	writeStartGuidance(&out, config.LoadResult{
+		Config:        cfg,
+		ConfigPath:    "/Users/example/.cors-gateway/config.yaml",
+		DomainPath:    "/Users/example/.cors-gateway/domains.txt",
+		OverrideNames: []string{"managed-system-proxy"},
+	})
+
+	got := out.String()
+	want := "Transparent CORS Gateway running\n" +
+		"config: /Users/example/.cors-gateway/config.yaml\n" +
+		"domain-list: /Users/example/.cors-gateway/domains.txt\n" +
+		"proxy-listen: 127.0.0.1:8080\n" +
+		"one-run overrides: managed-system-proxy\n"
+	if got != want {
+		t.Fatalf("start guidance = %q", got)
+	}
+	for _, unwanted := range []string{"pac-listen:", "control-listen:"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("start guidance included %q:\n%s", unwanted, got)
+		}
+	}
 }
 
 func TestRuntimeUsesAdapterAndCleansUpLifecycleState(t *testing.T) {
