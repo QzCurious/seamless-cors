@@ -245,6 +245,11 @@ managed-system-proxy: true
 # One domain or origin per line.
 domain-list: ~/.cors-gateway/domains.txt
 
+# Logging verbosity. Copy one of these values into the active setting:
+# log-level: debug
+# log-level: info
+# log-level: warn
+# log-level: error
 log-level: info
 
 # Opt into HTTPS interception. Generated CA is removed on stop.

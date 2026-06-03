@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"cors-vpn/internal/ca"
 	"cors-vpn/internal/config"
 	"cors-vpn/internal/control"
 	"cors-vpn/internal/domain"
@@ -66,6 +67,8 @@ type Runtime struct {
 	entries   []domain.Entry
 	adapter   platform.Adapter
 	stdout    io.Writer
+	authority *ca.EphemeralAuthority
+	proxyCore *proxy.Core
 	proxy     *http.Server
 	pac       *http.Server
 	control   *control.Server
@@ -110,6 +113,7 @@ func NewRuntime(cfg config.Config, entries []domain.Entry, adapter platform.Adap
 		entries:   entries,
 		adapter:   adapter,
 		stdout:    stdout,
+		proxyCore: proxyCore,
 		proxy:     &http.Server{Handler: proxyCore},
 		pac:       &http.Server{Handler: pac.Handler(pacBody)},
 		control:   controlServer,
@@ -125,10 +129,18 @@ func (r *Runtime) Serve(ctx context.Context) error {
 		}
 	}
 	if r.cfg.CATrusted {
-		if err := r.adapter.TrustCA(nil); err != nil {
+		runtimeDir, err := config.RuntimeDir()
+		if err != nil {
 			r.Close()
 			return err
 		}
+		authority, err := ca.Create(runtimeDir, r.adapter)
+		if err != nil {
+			r.Close()
+			return err
+		}
+		r.authority = authority
+		r.proxyCore.SetAuthority(authority)
 	}
 
 	errs := make(chan error, 3)
@@ -157,9 +169,7 @@ func (r *Runtime) Close() error {
 	if r.cfg.ManagedSystemProxy {
 		_ = r.adapter.RestoreProxy()
 	}
-	if r.cfg.CATrusted {
-		_ = r.adapter.RemoveCA()
-	}
+	_ = ca.Remove(r.authority, r.adapter)
 	return nil
 }
 

@@ -3,12 +3,15 @@ package ca
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"cors-vpn/internal/platform"
@@ -20,6 +23,9 @@ type EphemeralAuthority struct {
 	CertPath   string
 	KeyPath    string
 	CertPEM    []byte
+	KeyPEM     []byte
+	cert       *x509.Certificate
+	key        *rsa.PrivateKey
 }
 
 func Create(dir string, adapter platform.Adapter) (*EphemeralAuthority, error) {
@@ -60,7 +66,43 @@ func Create(dir string, adapter platform.Adapter) (*EphemeralAuthority, error) {
 	if err := recovery.WriteMarker(markerPath, recovery.Marker{Kind: "ca", Path: certPath, Files: []string{certPath, keyPath}}); err != nil {
 		return nil, err
 	}
-	return &EphemeralAuthority{MarkerPath: markerPath, CertPath: certPath, KeyPath: keyPath, CertPEM: certPEM}, nil
+	return &EphemeralAuthority{
+		MarkerPath: markerPath,
+		CertPath:   certPath,
+		KeyPath:    keyPath,
+		CertPEM:    certPEM,
+		KeyPEM:     keyPEM,
+		cert:       template,
+		key:        key,
+	}, nil
+}
+
+func (a *EphemeralAuthority) LeafCertificate(host string) (tls.Certificate, error) {
+	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	host = strings.TrimSuffix(host, ".")
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: host},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		template.IPAddresses = []net.IP{ip}
+	} else {
+		template.DNSNames = []string{host}
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, a.cert, &leafKey.PublicKey, a.key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(leafKey)})
+	return tls.X509KeyPair(certPEM, keyPEM)
 }
 
 func Remove(authority *EphemeralAuthority, adapter platform.Adapter) error {

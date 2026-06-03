@@ -4,8 +4,13 @@ package platform
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/hex"
+	"encoding/pem"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -14,8 +19,11 @@ func init() {
 }
 
 type DarwinAdapter struct {
-	runner   commandRunner
-	services []proxyServiceState
+	runner       commandRunner
+	services     []proxyServiceState
+	certPath     string
+	certSHA1     string
+	keychainPath string
 }
 
 type commandRunner interface {
@@ -79,12 +87,39 @@ func (a *DarwinAdapter) RestoreProxy() error {
 	return firstErr
 }
 
-func (a *DarwinAdapter) TrustCA([]byte) error {
-	return nil
+func (a *DarwinAdapter) TrustCA(certPEM []byte) error {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return fmt.Errorf("CA certificate PEM is invalid")
+	}
+	sum := sha1.Sum(block.Bytes)
+	a.certSHA1 = strings.ToUpper(hex.EncodeToString(sum[:]))
+	dir, err := os.MkdirTemp("", "cors-gateway-ca-*")
+	if err != nil {
+		return err
+	}
+	a.certPath = filepath.Join(dir, "ephemeral-ca.pem")
+	if err := os.WriteFile(a.certPath, certPEM, 0o600); err != nil {
+		return err
+	}
+	keychain := a.keychain()
+	_, err = a.security("add-trusted-cert", "-d", "-r", "trustRoot", "-k", keychain, a.certPath)
+	return err
 }
 
 func (a *DarwinAdapter) RemoveCA() error {
-	return nil
+	var firstErr error
+	if a.certSHA1 != "" {
+		if _, err := a.security("delete-certificate", "-Z", a.certSHA1, a.keychain()); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if a.certPath != "" {
+		if err := os.RemoveAll(filepath.Dir(a.certPath)); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (a *DarwinAdapter) listServices() ([]string, error) {
@@ -131,4 +166,23 @@ func (a *DarwinAdapter) networksetup(args ...string) ([]byte, error) {
 		return out, fmt.Errorf("networksetup %s failed: %s: %w", strings.Join(args, " "), bytes.TrimSpace(out), err)
 	}
 	return out, nil
+}
+
+func (a *DarwinAdapter) security(args ...string) ([]byte, error) {
+	out, err := a.runner.run("security", args...)
+	if err != nil {
+		return out, fmt.Errorf("security %s failed: %s: %w", strings.Join(args, " "), bytes.TrimSpace(out), err)
+	}
+	return out, nil
+}
+
+func (a *DarwinAdapter) keychain() string {
+	if a.keychainPath != "" {
+		return a.keychainPath
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "login.keychain-db"
+	}
+	return filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 }

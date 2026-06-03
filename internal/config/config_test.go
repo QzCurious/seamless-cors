@@ -66,6 +66,16 @@ func TestLoadOrBootstrapCreatesCommentedDefaultsAndAppliesOverrides(t *testing.T
 	if !bytes.Contains(configText, []byte("# Local proxy endpoint")) {
 		t.Fatalf("generated config is not commented:\n%s", configText)
 	}
+	for _, line := range []string{
+		"# log-level: debug",
+		"# log-level: info",
+		"# log-level: warn",
+		"# log-level: error",
+	} {
+		if !bytes.Contains(configText, []byte(line)) {
+			t.Fatalf("generated config missing %q:\n%s", line, configText)
+		}
+	}
 	if !bytes.Contains(out.Bytes(), []byte("Created:")) {
 		t.Fatalf("bootstrap output = %q", out.String())
 	}
