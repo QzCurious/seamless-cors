@@ -1,6 +1,7 @@
 package cors
 
 import (
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strings"
@@ -37,11 +38,39 @@ func WritePreflight(w http.ResponseWriter, req *http.Request) {
 }
 
 func RepairResponseHeaders(headers http.Header, origin string) {
+	if origin == "" {
+		return
+	}
 	for name := range corsHeaderNames {
 		headers.Del(name)
 	}
 	ApplyReflectivePolicy(headers, origin)
 	headers.Set("Access-Control-Expose-Headers", concreteExposeHeaders(headers))
+}
+
+type GatewayError struct {
+	Source  string `json:"source"`
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+func WriteGatewayError(w http.ResponseWriter, req *http.Request, status int, typ string, err error) {
+	h := w.Header()
+	h.Set("Content-Type", "application/json")
+	if req.Header.Get("Origin") != "" {
+		ApplyReflectivePolicy(h, req.Header.Get("Origin"))
+		h.Set("Access-Control-Expose-Headers", "Content-Type")
+	}
+	w.WriteHeader(status)
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	_ = json.NewEncoder(w).Encode(GatewayError{
+		Source:  "Transparent CORS Gateway",
+		Type:    typ,
+		Message: msg,
+	})
 }
 
 func ApplyReflectivePolicy(headers http.Header, origin string) {

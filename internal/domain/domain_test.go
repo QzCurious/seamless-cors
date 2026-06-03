@@ -39,3 +39,13 @@ func TestIPv6RequiresFullOrigin(t *testing.T) {
 		t.Fatal("full IPv6 origin did not match")
 	}
 }
+
+func TestInlineCommentsRequireWhitespaceBeforeHash(t *testing.T) {
+	entries, errs := ParseList("api#bad.example.test\napi.example.test # staging\n")
+	if len(errs) != 1 {
+		t.Fatalf("errs = %v", errs)
+	}
+	if len(entries) != 1 || entries[0].Host != "api.example.test" {
+		t.Fatalf("entries = %#v", entries)
+	}
+}

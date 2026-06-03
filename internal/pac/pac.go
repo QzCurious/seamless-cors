@@ -2,6 +2,7 @@ package pac
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"cors-vpn/internal/domain"
@@ -13,10 +14,20 @@ type Options struct {
 	Entries     []domain.Entry
 }
 
+func Handler(body string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	})
+}
+
 func Generate(opts Options) string {
 	var b strings.Builder
 	b.WriteString("function FindProxyForURL(url, host) {\n")
 	b.WriteString("  var scheme = url.substring(0, url.indexOf(':')).toLowerCase();\n")
+	b.WriteString("  var parsedPort = url.match(/^[a-zA-Z]+:\\/\\/\\[[^\\]]+\\]:(\\d+)/) || url.match(/^[a-zA-Z]+:\\/\\/[^\\/:]+:(\\d+)/);\n")
+	b.WriteString("  var urlPort = parsedPort ? parsedPort[1] : (scheme == 'https' ? '443' : '80');\n")
 	for _, entry := range opts.Entries {
 		if entry.Scheme == "https" && !opts.CATrusted {
 			continue
@@ -32,6 +43,9 @@ func writeRule(b *strings.Builder, entry domain.Entry, proxyListen string) {
 	var checks []string
 	if entry.Scheme != "" {
 		checks = append(checks, fmt.Sprintf("scheme == '%s'", entry.Scheme))
+	}
+	if entry.Port != "" {
+		checks = append(checks, fmt.Sprintf("urlPort == '%s'", entry.Port))
 	}
 	if entry.Wildcard {
 		parent := strings.TrimPrefix(entry.Host, "*.")

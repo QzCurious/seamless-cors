@@ -99,6 +99,9 @@ func parseHostname(text string) (Entry, error) {
 	if host == "" {
 		return Entry{}, fmt.Errorf("host is required")
 	}
+	if strings.Contains(host, "#") || strings.ContainsAny(host, " \t") {
+		return Entry{}, fmt.Errorf("host contains invalid characters")
+	}
 	wildcard := strings.HasPrefix(host, "*.")
 	if strings.Contains(strings.TrimPrefix(host, "*."), "*") {
 		return Entry{}, fmt.Errorf("wildcard must be a single leading label")
@@ -113,8 +116,15 @@ func parseHostname(text string) (Entry, error) {
 }
 
 func stripComment(line string) string {
-	if idx := strings.Index(line, "#"); idx >= 0 {
-		line = line[:idx]
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "#") {
+		return ""
+	}
+	for idx := 1; idx < len(line); idx++ {
+		if line[idx] == '#' && (line[idx-1] == ' ' || line[idx-1] == '\t') {
+			line = line[:idx]
+			break
+		}
 	}
 	return strings.TrimSpace(line)
 }
