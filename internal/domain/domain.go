@@ -88,7 +88,11 @@ func parseOrigin(text string) (Entry, error) {
 	if strings.Contains(host, "*") {
 		return Entry{}, fmt.Errorf("wildcards require hostname shorthand")
 	}
-	return Entry{Raw: text, Scheme: u.Scheme, Host: host, Port: u.Port()}, nil
+	port := u.Port()
+	if port == "" {
+		port = defaultPort(u.Scheme)
+	}
+	return Entry{Raw: text, Scheme: u.Scheme, Host: host, Port: port}, nil
 }
 
 func parseHostname(text string) (Entry, error) {
@@ -127,4 +131,15 @@ func stripComment(line string) string {
 		}
 	}
 	return strings.TrimSpace(line)
+}
+
+func defaultPort(scheme string) string {
+	switch scheme {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
 }

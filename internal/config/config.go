@@ -19,6 +19,7 @@ type Config struct {
 	DomainList         string `yaml:"domain-list"`
 	LogLevel           string `yaml:"log-level"`
 	CATrusted          bool   `yaml:"ca-trusted"`
+	SourcePath         string `yaml:"-"`
 }
 
 const DefaultConfigFileName = "config.yaml"
@@ -120,11 +121,45 @@ func LoadOrBootstrap(configPath string, overrides Overrides, stdout io.Writer) (
 	if err := Validate(cfg); err != nil {
 		return LoadResult{}, err
 	}
+	cfg.SourcePath = configPath
 	return LoadResult{
 		Config:        cfg,
 		ConfigPath:    configPath,
 		DomainPath:    cfg.DomainList,
 		Bootstrapped:  bootstrapped,
+		OverrideNames: overrides.Names(),
+	}, nil
+}
+
+func LoadExisting(configPath string, overrides Overrides) (LoadResult, error) {
+	if configPath == "" {
+		var err error
+		configPath, err = DefaultConfigPath()
+		if err != nil {
+			return LoadResult{}, err
+		}
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return LoadResult{}, err
+	}
+	cfg := Default()
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return LoadResult{}, fmt.Errorf("invalid config.yaml: %w", err)
+	}
+	cfg = ApplyOverrides(cfg, overrides)
+	cfg.DomainList, err = ExpandPath(cfg.DomainList)
+	if err != nil {
+		return LoadResult{}, err
+	}
+	if err := Validate(cfg); err != nil {
+		return LoadResult{}, err
+	}
+	cfg.SourcePath = configPath
+	return LoadResult{
+		Config:        cfg,
+		ConfigPath:    configPath,
+		DomainPath:    cfg.DomainList,
 		OverrideNames: overrides.Names(),
 	}, nil
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"cors-vpn/internal/domain"
 )
@@ -20,6 +21,26 @@ func Handler(body string) http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
 	})
+}
+
+type DynamicHandler struct {
+	body atomic.Value
+}
+
+func NewDynamicHandler(body string) *DynamicHandler {
+	h := &DynamicHandler{}
+	h.Set(body)
+	return h
+}
+
+func (h *DynamicHandler) Set(body string) {
+	h.body.Store(body)
+}
+
+func (h *DynamicHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(h.body.Load().(string)))
 }
 
 func Generate(opts Options) string {

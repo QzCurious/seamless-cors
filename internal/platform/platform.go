@@ -1,5 +1,7 @@
 package platform
 
+import "fmt"
+
 type Adapter interface {
 	InstallPAC(url string) error
 	RestoreProxy() error
@@ -9,9 +11,11 @@ type Adapter interface {
 
 type NoopAdapter struct{}
 
-func (NoopAdapter) InstallPAC(string) error { return nil }
-func (NoopAdapter) RestoreProxy() error     { return nil }
-func (NoopAdapter) TrustCA([]byte) error    { return nil }
-func (NoopAdapter) RemoveCA() error         { return nil }
+func (NoopAdapter) InstallPAC(string) error {
+	return fmt.Errorf("managed system proxy is unsupported on this platform; set managed-system-proxy: false and configure proxy-listen manually")
+}
+func (NoopAdapter) RestoreProxy() error  { return nil }
+func (NoopAdapter) TrustCA([]byte) error { return nil }
+func (NoopAdapter) RemoveCA() error      { return nil }
 
 var CurrentAdapter Adapter = NoopAdapter{}

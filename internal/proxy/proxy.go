@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"cors-vpn/internal/ca"
 	"cors-vpn/internal/cors"
@@ -27,6 +28,7 @@ type Options struct {
 
 type Core struct {
 	entries   []domain.Entry
+	mu        sync.RWMutex
 	caTrusted bool
 	authority *ca.EphemeralAuthority
 	logger    *log.Logger
@@ -47,6 +49,12 @@ func New(opts Options) *Core {
 
 func (c *Core) SetAuthority(authority *ca.EphemeralAuthority) {
 	c.authority = authority
+}
+
+func (c *Core) SetEntries(entries []domain.Entry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = entries
 }
 
 func (c *Core) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -177,6 +185,14 @@ func (c *Core) serveInterceptedHTTPS(conn net.Conn, upstreamHost string) {
 		req.Host = upstreamHost
 		req.RequestURI = ""
 
+		if cors.IsPreflight(req) {
+			cors.WritePreflight(rawResponseWriter{conn: conn, headers: http.Header{}}, req)
+			if !shouldKeepAlive(req, nil) {
+				return
+			}
+			continue
+		}
+
 		resp, err := c.transport.RoundTrip(req)
 		if err != nil {
 			cors.WriteGatewayError(rawResponseWriter{conn: conn, headers: http.Header{}}, req, http.StatusBadGateway, "upstream", err)
@@ -229,6 +245,8 @@ func (c *Core) matches(target *url.URL) bool {
 	if port == "" {
 		port = defaultPort(target.Scheme)
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	for _, entry := range c.entries {
 		if entry.Matches(target.Scheme, host, port) {
 			return true
@@ -243,6 +261,8 @@ func (c *Core) matchesHostPort(scheme, hostPort string) bool {
 		host = hostPort
 		port = defaultPort(scheme)
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	for _, entry := range c.entries {
 		if entry.Matches(scheme, host, port) {
 			return true
@@ -283,6 +303,9 @@ func defaultPort(scheme string) string {
 }
 
 func shouldKeepAlive(req *http.Request, resp *http.Response) bool {
+	if resp == nil {
+		return !req.Close
+	}
 	return !req.Close && !resp.Close
 }
 

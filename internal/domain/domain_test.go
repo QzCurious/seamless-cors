@@ -29,6 +29,22 @@ https://localhost:9443
 	}
 }
 
+func TestFullOriginWithoutExplicitPortMatchesOnlyDefaultPort(t *testing.T) {
+	entry, err := ParseEntry("https://api.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !entry.Matches("https", "api.example.test", "443") {
+		t.Fatal("https origin should match the default HTTPS port")
+	}
+	if entry.Matches("https", "api.example.test", "8443") {
+		t.Fatal("https origin without explicit port matched a non-default port")
+	}
+	if entry.Matches("http", "api.example.test", "80") {
+		t.Fatal("https origin matched a different scheme")
+	}
+}
+
 func TestIPv6RequiresFullOrigin(t *testing.T) {
 	if _, err := ParseEntry("::1"); err == nil {
 		t.Fatal("expected IPv6 shorthand to fail")
