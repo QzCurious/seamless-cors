@@ -1,0 +1,659 @@
+# CORS VPN
+
+CORS VPN is a DEV/QA context for controlled browser-origin testing across configured upstream domains.
+
+## Language
+
+**Transparent CORS Gateway**:
+A local DEV/QA network tool that sits between the browser and configured upstream domains so browser requests can be tested under adjusted cross-origin behavior without changing application request URLs.
+_Avoid_: CORS VPN, generic proxy, CORS middleware
+
+**Managed System Proxy**:
+A traffic capture approach where the gateway configures the operating system or browser proxy settings on behalf of the user, so application requests keep their original URLs and no manual proxy setup is required.
+_Avoid_: VPN, manual proxy, browser-only workaround
+
+**Selective Managed Proxy**:
+A Managed System Proxy behavior where only Domain List matches are routed through the gateway and all other traffic bypasses it.
+_Avoid_: whole-system proxy, blanket proxying
+
+**PAC Routing**:
+A Selective Managed Proxy approach that uses a proxy auto-configuration file to route Domain List matches through the gateway while returning `DIRECT` for other traffic.
+_Avoid_: global proxy, pass-through proxying
+
+**Trust-Aware PAC Routing**:
+A PAC Routing behavior where matched HTTPS traffic is routed through the gateway only when Trusted HTTPS Interception is enabled.
+_Avoid_: routing unrepaired HTTPS, unnecessary HTTPS proxying
+
+**Generated PAC**:
+A runtime proxy auto-configuration artifact derived from Explicit Configuration and the Domain List, not edited directly by the user.
+_Avoid_: user-authored PAC, manual PAC rules
+
+**PAC Endpoint**:
+A local HTTP endpoint served by the gateway that returns the current Generated PAC.
+_Avoid_: file PAC, static PAC file
+
+**Manual Proxy Mode**:
+A traffic capture approach where the gateway exposes a local proxy endpoint and the user configures their browser, operating system, or test tool to use it.
+_Avoid_: unmanaged mode, custom routing
+
+**Untouched HTTPS Tunnel**:
+A Manual Proxy Mode behavior where HTTPS traffic that is not eligible for Trusted HTTPS Interception is forwarded without inspection or repair.
+_Avoid_: rejected CONNECT, accidental HTTPS interception
+
+**Default Upstream Negotiation**:
+A gateway transport behavior where upstream HTTP protocol selection uses the Go runtime's normal negotiation instead of forcing a specific upstream protocol.
+_Avoid_: forced HTTP/1.1 upstream, guaranteed HTTP/2 feature
+
+**Explicit Gateway Error**:
+A gateway-generated failure response that clearly identifies the Transparent CORS Gateway as the source and explains the upstream or lifecycle problem.
+_Avoid_: disguised upstream error, silent failure
+
+**CORS-Readable Gateway Error**:
+An Explicit Gateway Error that includes the Reflective DEV/QA Policy headers when the original request is a matched Origin-gated request.
+_Avoid_: hidden gateway error, browser-masked failure
+
+**JSON Gateway Error**:
+An Explicit Gateway Error encoded as JSON for frontend API debugging.
+_Avoid_: HTML error page, plain-text API error
+
+**Gateway Error Status Mapping**:
+The HTTP status convention where upstream failures use `502`, upstream timeouts use `504`, and gateway internal failures use `500`.
+_Avoid_: all-500 errors, disguised upstream status
+
+**No Request Timeout**:
+A gateway behavior where requests are not failed by a gateway-imposed application timeout; only transport and idle cleanup timeouts apply.
+_Avoid_: gateway request deadline, forced API timeout
+
+**Client Abort Propagation**:
+A gateway behavior where client-side request cancellation closes or cancels the corresponding upstream work.
+_Avoid_: orphaned upstream request, ignored client disconnect
+
+**Gateway Distribution**:
+The installable form of the Transparent CORS Gateway for a specific operating system and CPU architecture.
+_Avoid_: cross-platform binary
+
+**Managed Platform**:
+A supported operating system where the gateway can configure PAC Routing and user trust on behalf of the user.
+_Avoid_: universal managed support, all-platform parity
+
+**Manual Platform**:
+A supported operating system where the gateway can run locally but the user must configure proxy routing manually.
+_Avoid_: unsupported platform
+
+**User-Trusted Development CA**:
+A local certificate authority trusted only in the current user's trust store so the gateway can inspect HTTPS traffic for configured upstream domains during DEV/QA work.
+_Avoid_: system-wide CA, production CA, shared CA
+
+**OS Trust Only**:
+A trust model where the gateway manages only the current user's operating-system trust store and does not inspect or manage browser-specific trust stores.
+_Avoid_: browser trust management, profile-specific trust diagnostics
+
+**Ephemeral User CA**:
+A local development certificate authority generated for a gateway run, trusted only in the current user's operating-system trust store, and removed with its local files when the gateway stops.
+_Avoid_: persistent CA, system-wide CA, retained CA key
+
+**Trusted HTTPS Interception**:
+A lifecycle behavior where matched HTTPS traffic is intercepted only when `ca-trusted` is enabled and the Ephemeral User CA is trusted for the current user.
+_Avoid_: untrusted HTTPS interception, broken MITM
+
+**Opt-In CA Trust**:
+A lifecycle default where generated configuration starts with `ca-trusted: false` so HTTPS interception requires an explicit user choice.
+_Avoid_: default CA trust, implicit HTTPS interception
+
+**Full CA Removal**:
+A trust lifecycle behavior where gateway shutdown or configured CA removal removes the Ephemeral User CA from OS trust and deletes the local CA files.
+_Avoid_: trust-only removal, retained CA key
+
+**CA Recovery**:
+A safeguard that removes leftover Ephemeral User CA trust and files during start or stop when Graceful Cleanup could not run.
+_Avoid_: orphaned CA, retained development CA
+
+**Live Configuration**:
+A gateway behavior where request handling uses the newest available request policy without requiring the user to manually restart or reload the program.
+_Avoid_: manual reload, restart requirement, stale configuration
+
+**All-Or-Nothing Config**:
+A configuration behavior where a valid config file is applied as a whole and an invalid config file is rejected without partially changing gateway behavior.
+_Avoid_: partial config application, half-applied config
+
+**Fatal Config Error**:
+A configuration behavior where an invalid config file causes the gateway to log the validation problem, perform Graceful Cleanup, and stop.
+_Avoid_: silent config fallback, stale config after invalid edit
+
+**Lifecycle Operation**:
+A gateway operation chosen explicitly through a command or start-time flag because it can affect OS proxy settings, listener binding, or certificate authority identity.
+_Avoid_: live OS reconfiguration, config-triggered permission prompt
+
+**Fixed Listener Ports**:
+A lifecycle behavior where default proxy and PAC listener ports are stable and startup fails if they are unavailable.
+_Avoid_: automatic port switching
+
+**Loopback Default**:
+A listener behavior where proxy and PAC endpoints bind to loopback by default, with warnings for explicitly configured non-loopback listeners.
+_Avoid_: LAN-exposed default proxy
+
+**Control Endpoint**:
+A separate loopback endpoint used by gateway commands such as stop and status, protected by runtime state rather than mixed into browser proxy traffic.
+_Avoid_: proxy-path admin command, public control API
+
+**Proxy Listener**:
+The browser-facing local proxy endpoint configured as `proxy-listen`.
+_Avoid_: generic listen, gatewayListen
+
+**Listener Address**:
+A lifecycle configuration value written as `host:port` for local proxy, PAC, or control listeners.
+_Avoid_: listener URL, scheme-bearing listener config
+
+**Explicit Configuration**:
+The complete user-editable gateway configuration, including both live request policy and lifecycle settings.
+_Avoid_: hidden defaults, flag-only configuration
+
+**Path Expansion**:
+A configuration behavior where path fields support home-directory and environment-variable expansion.
+_Avoid_: arbitrary string expansion
+
+**Home Config Directory**:
+The default user configuration location at `.cors-gateway` under the user's home directory.
+_Avoid_: platform-native app config directory
+
+**Runtime State Directory**:
+The durable runtime and recovery state location under the Home Config Directory.
+_Avoid_: temp runtime state, volatile recovery state
+
+**Marker-Based Recovery**:
+A recovery behavior that cleans only proxy or CA state proven to belong to a previous gateway run by runtime markers.
+_Avoid_: guessed recovery, broad OS state cleanup
+
+**Single User Instance**:
+A runtime rule where only one gateway process may run for a user at a time.
+_Avoid_: multi-instance gateway, competing PAC state
+
+**One-Run Override**:
+A start-time flag that overrides Explicit Configuration only for the current gateway process and is shown clearly in status.
+_Avoid_: hidden config mutation, persistent flag change
+
+**First-Start Bootstrap**:
+A startup behavior where missing default config and Domain List files are created automatically before validation continues.
+_Avoid_: init command, manual file scaffolding
+
+**Commented Default Config**:
+A First-Start Bootstrap behavior where generated configuration includes short comments for user-editable settings.
+_Avoid_: opaque default config, verbose manual
+
+**Pending Lifecycle Change**:
+A lifecycle setting change detected while the gateway is running that is reported to the user but not applied automatically.
+_Avoid_: surprise permission prompt, implicit restart
+
+**Restart-Applied Lifecycle**:
+A lifecycle behavior where pending changes to OS proxy management, listener binding, or certificate authority identity take effect only after the gateway is restarted.
+_Avoid_: apply-lifecycle command, hot lifecycle swap
+
+**Proxy Recovery**:
+A Managed System Proxy safeguard that records previous user proxy settings and restores leftover gateway proxy state during start or stop when Graceful Cleanup could not run.
+_Avoid_: best-effort cleanup only, orphaned proxy
+
+**Proxy Chaining**:
+A Managed System Proxy behavior where an existing user proxy is preserved as the gateway's upstream proxy instead of being discarded.
+_Avoid_: proxy replacement, corporate proxy bypass
+
+**Minimal Command Surface**:
+The user-facing command model where normal operation is limited to starting, stopping, and checking the gateway while runtime behavior follows Live Configuration.
+_Avoid_: command-heavy configuration, flag-driven operation
+
+**Three Commands**:
+The v1 command surface: `start`, `stop`, and `status`.
+_Avoid_: init command, trust command, config editing command
+
+**Foreground Start**:
+A v1 runtime behavior where `start` runs attached in the foreground rather than launching an official background daemon.
+_Avoid_: daemon mode, background start
+
+**Graceful Cleanup**:
+A gateway shutdown behavior triggered by Ctrl-C, stop command, or normal termination that restores proxy settings and performs Full CA Removal.
+_Avoid_: manual cleanup, abandoned lifecycle state
+
+**Human Status**:
+A status output intended for interactive DEV/QA use rather than machine-readable automation.
+_Avoid_: JSON status, scripting API
+
+**Read-Only Status**:
+A status behavior that reports gateway and recovery state without changing proxy settings, CA trust, or runtime files.
+_Avoid_: status-triggered cleanup, mutating status command
+
+**Full URL Logging**:
+A diagnostic behavior where request logs include full URLs, including query strings, for DEV/QA debugging.
+_Avoid_: query redaction by default
+
+**Matched Request Logging**:
+A diagnostic behavior where every request routed through the gateway because of a Domain List match is logged.
+_Avoid_: repair-only logging, error-only logging
+
+**Unmatched Quiet Mode**:
+A diagnostic behavior where unmatched traffic is not logged in Managed System Proxy mode and is logged only at debug level in Manual Proxy Mode.
+_Avoid_: noisy unmatched logging, unrelated browsing logs
+
+**Domain List**:
+The user-managed newline-delimited set of upstream hostnames or origins where the gateway is allowed to adjust browser-origin behavior during DEV/QA work.
+_Avoid_: routing table, interception rules, proxy rules
+
+**Domain List Comment**:
+A full-line or inline note in the Domain List that is ignored during matching.
+_Avoid_: comment-as-entry
+
+**Active Domain Requirement**:
+A startup validation rule that requires at least one valid Domain List Entry before the gateway starts, even if current lifecycle settings make some entries non-repairable.
+_Avoid_: empty startup, no-op managed proxy
+
+**Domain List Entry**:
+A single line in the Domain List that may name a full origin or use hostname shorthand for easy DEV/QA configuration.
+_Avoid_: rule, matcher expression
+
+**Hostname Shorthand**:
+A Domain List Entry that names a host without scheme so it matches that host across schemes and ports.
+_Avoid_: default-port-only shorthand, scheme-specific shorthand
+
+**Line-Level Domain Validation**:
+A Domain List behavior where each line is validated independently so invalid entries can be reported without preventing valid entries from being served while the gateway is already running.
+_Avoid_: whole-file invalidation
+
+**Exact Domain Match**:
+A Domain List matching rule where hostname shorthand matches only the named host unless the entry uses an explicit wildcard.
+_Avoid_: implicit subdomain match, broad domain match
+
+**Single-Label Wildcard**:
+A Domain List matching rule where `*.example.com` matches exactly one subdomain label and does not match the parent domain or deeper subdomains.
+_Avoid_: recursive wildcard, parent-domain wildcard
+
+**Local Target**:
+A localhost, loopback, private IP, or plain HTTP upstream entry that may be included in the Domain List for DEV/QA work.
+_Avoid_: public-domain-only target, DNS-only target
+
+**IPv6 Full Origin**:
+A Domain List Entry for an IPv6 target that must include scheme and bracketed IPv6 host syntax.
+_Avoid_: IPv6 hostname shorthand
+
+**Reflective DEV/QA Policy**:
+The default cross-origin behavior for Domain List matches, where the gateway reflects the browser request's origin and requested CORS capabilities so credentialed development and testing flows are browser-valid.
+_Avoid_: wildcard CORS, production CORS policy, allow-all policy
+
+**Credentialed Reflection**:
+A Reflective DEV/QA Policy behavior where matched Origin-gated responses always include `Access-Control-Allow-Credentials: true` with a reflected request origin.
+_Avoid_: wildcard credentials, credentialless default
+
+**Null Origin Reflection**:
+A Credentialed Reflection behavior where `Origin: null` is reflected for matched DEV/QA requests.
+_Avoid_: null origin rejection
+
+**Origin Vary Preservation**:
+A Response Repair behavior where existing `Vary` values are preserved and `Origin` is added when absent.
+_Avoid_: Vary clobbering, duplicate Origin Vary
+
+**Requested Header Reflection**:
+A Reflective DEV/QA Policy behavior where preflight responses echo the browser's requested header list instead of using a wildcard.
+_Avoid_: wildcard allow-headers
+
+**Requested Method Reflection**:
+A Local Preflight Answer behavior where preflight responses echo the browser's requested method instead of returning a broad method list.
+_Avoid_: broad allow-methods
+
+**Global CORS Policy**:
+A gateway behavior where every Domain List match uses the same Reflective DEV/QA Policy instead of per-domain policy settings.
+_Avoid_: per-domain CORS policy, domain-specific overrides
+
+**Origin-Gated Rewriting**:
+A gateway behavior where cross-origin response changes are applied only when the browser request includes an `Origin` header.
+_Avoid_: blanket rewriting, unconditional CORS headers
+
+**Local Preflight Answer**:
+A gateway behavior where browser CORS preflight requests for Domain List matches are answered by the gateway instead of being forwarded upstream.
+_Avoid_: upstream preflight, preflight repair
+
+**Private Network Access Reflection**:
+A Local Preflight Answer behavior where matched requests that ask for private network access receive `Access-Control-Allow-Private-Network: true`.
+_Avoid_: PNA omission for local targets
+
+**Fixed Preflight Cache**:
+A Local Preflight Answer behavior that uses a fixed `Access-Control-Max-Age` of 600 seconds.
+_Avoid_: configurable preflight cache, indefinite preflight cache
+
+**Response Repair**:
+A gateway behavior where real upstream responses for Domain List matches are adjusted on the way back to satisfy the Reflective DEV/QA Policy.
+_Avoid_: request rewrite, upstream configuration
+
+**All-Status Repair**:
+A Response Repair behavior where matched Origin-gated upstream responses receive CORS repair regardless of upstream status code.
+_Avoid_: success-only repair, hidden API error
+
+**No Request Header Rewriting**:
+The product boundary that leaves browser request headers unchanged except for ordinary proxy transport mechanics.
+_Avoid_: Origin rewriting, Referer rewriting, auth header mutation
+
+**CORS Header Replacement**:
+A Response Repair behavior where existing upstream CORS headers are removed before the gateway writes the Reflective DEV/QA Policy headers.
+_Avoid_: CORS header merge, duplicate CORS headers
+
+**Concrete Exposed Headers**:
+A Response Repair behavior where `Access-Control-Expose-Headers` lists actual upstream response header names, excluding CORS headers, for maximum browser compatibility.
+_Avoid_: wildcard expose-headers
+
+**HTTP CORS Scope**:
+The product boundary that focuses gateway repair on browser HTTP/HTTPS CORS requests and leaves WebSocket protocol behavior out of scope.
+_Avoid_: WebSocket repair, protocol frame rewriting
+
+**WebSocket Skip**:
+A gateway behavior where WebSocket upgrade requests are forwarded without CORS repair or protocol-specific changes.
+_Avoid_: WebSocket origin bypass, upgrade repair
+
+**Cookie Out of Scope**:
+The product boundary that leaves cookie attributes, cookie values, sessions, and authentication behavior unchanged.
+_Avoid_: cookie repair, auth bypass, session rewriting
+
+## Example Dialogue
+
+Developer: "Can I point my browser traffic through the Transparent CORS Gateway for the staging API?"
+
+QA engineer: "Yes, but only for configured upstream domains so unrelated browsing stays outside the gateway."
+
+Developer: "Do I need to configure my browser proxy manually?"
+
+QA engineer: "No, the Managed System Proxy handles that while the gateway is running."
+
+Developer: "Will unrelated browser traffic go through the gateway?"
+
+QA engineer: "No, Selective Managed Proxy uses PAC Routing so only Domain List matches go through the gateway."
+
+Developer: "Will HTTPS domains still route through the gateway when `ca-trusted` is false?"
+
+QA engineer: "No, Trust-Aware PAC Routing sends those HTTPS requests direct because they cannot be repaired."
+
+Developer: "Do I need to maintain the PAC file?"
+
+QA engineer: "No, Generated PAC is derived from Explicit Configuration and the Domain List."
+
+Developer: "How do Domain List changes reach the operating system proxy?"
+
+QA engineer: "The PAC Endpoint serves the current Generated PAC, so routing updates without reinstalling proxy settings."
+
+Developer: "Can I avoid changing my system proxy settings?"
+
+QA engineer: "Yes, use Manual Proxy Mode and point only the browser or test tool at the local proxy endpoint."
+
+Developer: "What happens to HTTPS traffic in Manual Proxy Mode when interception is disabled?"
+
+QA engineer: "Untouched HTTPS Tunnel keeps it forwarding without inspection or repair."
+
+Developer: "Does the gateway force HTTP/1.1 upstream?"
+
+QA engineer: "No, Default Upstream Negotiation lets Go select the upstream protocol normally."
+
+Developer: "What if upstream TLS verification fails?"
+
+QA engineer: "Explicit Gateway Error makes clear the failure came from the gateway while preserving the upstream TLS problem."
+
+Developer: "Will frontend code be able to read gateway errors?"
+
+QA engineer: "CORS-Readable Gateway Error makes matched Origin-gated gateway failures visible to the browser client."
+
+Developer: "What format do gateway errors use?"
+
+QA engineer: "JSON Gateway Error keeps failures easy to inspect from frontend API clients."
+
+Developer: "How are gateway failures status-coded?"
+
+QA engineer: "Gateway Error Status Mapping uses `502` for upstream failures, `504` for upstream timeouts, and `500` for gateway failures."
+
+Developer: "Will the gateway impose its own API request timeout?"
+
+QA engineer: "No, No Request Timeout avoids adding an application deadline, while Client Abort Propagation cleans up when the browser cancels."
+
+Developer: "Will the gateway configure Firefox or browser profile certificate stores?"
+
+QA engineer: "No, OS Trust Only keeps certificate trust limited to the current user's operating-system trust store."
+
+Developer: "What happens when `ca-trusted` is false?"
+
+QA engineer: "Trusted HTTPS Interception is disabled, so matched HTTPS traffic is not intercepted."
+
+Developer: "Will the first run automatically trust a CA?"
+
+QA engineer: "No, Opt-In CA Trust makes HTTPS interception an explicit configuration choice."
+
+Developer: "Will the gateway keep reusing the same development CA?"
+
+QA engineer: "No, Ephemeral User CA generates trust material for a gateway run and removes it on stop."
+
+Developer: "What does configured CA removal remove?"
+
+QA engineer: "Full CA Removal removes OS trust and deletes the local CA files."
+
+Developer: "What happens if the gateway crashes before removing its CA?"
+
+QA engineer: "CA Recovery removes leftover Ephemeral User CA trust and files on the next start or stop."
+
+Developer: "Will every operating system have the same managed setup in v1?"
+
+QA engineer: "No, Managed Platforms get automated PAC Routing while Manual Platforms can still run the gateway locally."
+
+Developer: "After I update the Domain List, do I need to restart the gateway?"
+
+QA engineer: "No, Live Configuration applies the newest values to incoming requests."
+
+Developer: "What happens if I save an invalid config file while the gateway is running?"
+
+QA engineer: "Fatal Config Error logs the validation problem, performs Graceful Cleanup, and stops the gateway."
+
+Developer: "Do I need a command for every setting?"
+
+QA engineer: "No, the Minimal Command Surface keeps commands rare and lets configuration drive behavior while the gateway is running."
+
+Developer: "Which commands exist in v1?"
+
+QA engineer: "Three Commands: `start`, `stop`, and `status`."
+
+Developer: "Does `start` launch a background service?"
+
+QA engineer: "No, Foreground Start keeps logs and Ctrl-C cleanup visible in v1."
+
+Developer: "Does Ctrl-C clean up the proxy and CA?"
+
+QA engineer: "Yes, Graceful Cleanup runs on Ctrl-C and the stop command."
+
+Developer: "Is status intended for scripts?"
+
+QA engineer: "No, Human Status is optimized for interactive understanding."
+
+Developer: "Can status change proxy or CA state?"
+
+QA engineer: "No, Read-Only Status reports state without performing cleanup."
+
+Developer: "Will logs include query strings?"
+
+QA engineer: "Yes, Full URL Logging includes query strings for DEV/QA debugging."
+
+Developer: "How do I know a Domain List entry is actually being used?"
+
+QA engineer: "Matched Request Logging logs every matched request routed through the gateway."
+
+Developer: "Will unrelated traffic fill the logs?"
+
+QA engineer: "No, Unmatched Quiet Mode keeps unrelated traffic out of normal logs."
+
+Developer: "Can editing configuration unexpectedly trigger an OS permission prompt?"
+
+QA engineer: "No, lifecycle settings live in Explicit Configuration but become a Pending Lifecycle Change while the gateway is running."
+
+Developer: "What happens if the default port is already in use?"
+
+QA engineer: "Fixed Listener Ports makes startup fail clearly instead of silently choosing another port."
+
+Developer: "Can other machines use my gateway by default?"
+
+QA engineer: "No, Loopback Default keeps listener endpoints local unless explicitly changed."
+
+Developer: "Do stop and status go through the proxy listener?"
+
+QA engineer: "No, Control Endpoint keeps command traffic separate from browser proxy traffic."
+
+Developer: "Which listener do browsers use?"
+
+QA engineer: "Proxy Listener is the browser-facing endpoint."
+
+Developer: "Are listener settings URLs?"
+
+QA engineer: "No, Listener Address values are `host:port` bind addresses."
+
+Developer: "How do pending lifecycle changes take effect?"
+
+QA engineer: "Restart-Applied Lifecycle means they apply on the next gateway start."
+
+Developer: "What happens if the gateway crashes after changing my proxy settings?"
+
+QA engineer: "Proxy Recovery restores the previous settings when leftover gateway proxy state is detected."
+
+Developer: "What if I already use a corporate proxy?"
+
+QA engineer: "Proxy Chaining preserves supported existing proxy settings by routing gateway upstream traffic through them."
+
+Developer: "What do I need to configure before starting?"
+
+QA engineer: "Explicit Configuration contains the full setup, while the Domain List stays as the easy one-domain-per-line file."
+
+Developer: "Where do config files live by default?"
+
+QA engineer: "Home Config Directory keeps them under `.cors-gateway` in the user's home directory."
+
+Developer: "Where does crash recovery state live?"
+
+QA engineer: "Runtime State Directory keeps recovery state durable under the Home Config Directory."
+
+Developer: "Will recovery modify state just because it looks suspicious?"
+
+QA engineer: "No, Marker-Based Recovery acts only on state proven by gateway runtime markers."
+
+Developer: "Can I run two gateways at once?"
+
+QA engineer: "No, Single User Instance keeps proxy, CA, and recovery state coherent."
+
+Developer: "Do start flags edit my config file?"
+
+QA engineer: "No, One-Run Override applies only to the current gateway process."
+
+Developer: "Can config paths use `~` or environment variables?"
+
+QA engineer: "Yes, Path Expansion applies to path fields only."
+
+Developer: "Can the gateway start with no domains?"
+
+QA engineer: "No, Active Domain Requirement prevents a no-op managed proxy startup."
+
+Developer: "Do I need to run an init command first?"
+
+QA engineer: "No, First-Start Bootstrap creates the default files when needed."
+
+Developer: "Will generated config explain the settings?"
+
+QA engineer: "Yes, Commented Default Config keeps the generated file short but understandable."
+
+Developer: "Can I write just `api.dev.example.com`?"
+
+QA engineer: "Yes, that Domain List Entry uses hostname shorthand; use a full origin only when scheme or port matters."
+
+Developer: "Can I annotate domains in the Domain List?"
+
+QA engineer: "Yes, Domain List Comment supports full-line and inline comments."
+
+Developer: "Does hostname shorthand include custom ports?"
+
+QA engineer: "Yes, Hostname Shorthand matches the named host across schemes and ports."
+
+Developer: "What if one Domain List line is wrong?"
+
+QA engineer: "Line-Level Domain Validation reports the invalid line while valid entries keep working during a running session."
+
+Developer: "Does `api.dev.example.com` include its subdomains?"
+
+QA engineer: "No, Exact Domain Match requires an explicit wildcard when subdomains should be included."
+
+Developer: "Does `*.example.com` match `deep.api.example.com`?"
+
+QA engineer: "No, Single-Label Wildcard matches only one subdomain label."
+
+Developer: "Can I include my local API or a LAN staging service?"
+
+QA engineer: "Yes, Local Targets are allowed."
+
+Developer: "Can I write IPv6 shorthand in the Domain List?"
+
+QA engineer: "No, IPv6 Full Origin keeps IPv6 entries unambiguous."
+
+Developer: "Can credentialed browser requests work without configuring allowed origins?"
+
+QA engineer: "Yes, the Reflective DEV/QA Policy reflects the request origin instead of using a wildcard."
+
+Developer: "Are credentials allowed for matched CORS responses?"
+
+QA engineer: "Yes, Credentialed Reflection always allows credentials with the reflected origin."
+
+Developer: "What if the browser sends `Origin: null`?"
+
+QA engineer: "Null Origin Reflection treats it as a valid DEV/QA origin value."
+
+Developer: "What happens to existing `Vary` headers?"
+
+QA engineer: "Origin Vary Preservation keeps existing values and adds `Origin` once."
+
+Developer: "How are preflight request headers allowed?"
+
+QA engineer: "Requested Header Reflection echoes the browser's requested header list."
+
+Developer: "How are preflight request methods allowed?"
+
+QA engineer: "Requested Method Reflection echoes the browser's requested method."
+
+Developer: "Can each domain have a different CORS policy?"
+
+QA engineer: "No, Global CORS Policy applies the same DEV/QA behavior to every Domain List match."
+
+Developer: "Will same-origin or non-browser traffic get CORS headers added?"
+
+QA engineer: "No, Origin-Gated Rewriting leaves traffic without an `Origin` header unchanged."
+
+Developer: "Does the upstream server need to handle preflight correctly?"
+
+QA engineer: "No, Local Preflight Answer handles browser preflight and Response Repair handles the real upstream response."
+
+Developer: "Are Private Network Access preflights handled?"
+
+QA engineer: "Yes, Private Network Access Reflection allows matched PNA preflights."
+
+Developer: "Will `401` or `500` upstream responses still be readable by frontend code?"
+
+QA engineer: "Yes, All-Status Repair applies CORS repair to upstream errors too."
+
+Developer: "How long can browsers cache local preflight answers?"
+
+QA engineer: "Fixed Preflight Cache uses 600 seconds."
+
+Developer: "Will the gateway rewrite `Origin` if the upstream rejects it?"
+
+QA engineer: "No, No Request Header Rewriting keeps upstream application checks out of scope."
+
+Developer: "What if the API already returns partial CORS headers?"
+
+QA engineer: "CORS Header Replacement removes them first so the browser sees one consistent DEV/QA policy."
+
+Developer: "How are response headers exposed to frontend code?"
+
+QA engineer: "Concrete Exposed Headers lists the upstream response headers instead of using a wildcard."
+
+Developer: "Will the gateway fix WebSocket origin behavior?"
+
+QA engineer: "No, HTTP CORS Scope keeps WebSocket protocol behavior out of v1."
+
+Developer: "What if the WebSocket domain is in the Domain List?"
+
+QA engineer: "WebSocket Skip still forwards it without gateway repair."
+
+Developer: "Will the gateway rewrite cookies so login works?"
+
+QA engineer: "No, Cookie Out of Scope leaves cookie and authentication behavior unchanged."
