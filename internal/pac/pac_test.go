@@ -32,6 +32,24 @@ func TestGenerateUsesTrustAwareHTTPSRouting(t *testing.T) {
 	}
 }
 
+func TestGenerateRoutesHostnameShorthandHTTPSOnlyWhenCATrusted(t *testing.T) {
+	entry, err := domain.ParseEntry("api.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := Generate(Options{
+		ProxyListen: "127.0.0.1:8080",
+		CATrusted:   false,
+		Entries:     []domain.Entry{entry},
+	})
+	if !strings.Contains(js, "scheme == 'http' && host == 'api.example.test'") {
+		t.Fatalf("hostname shorthand should route HTTP when CA is not trusted, got:\n%s", js)
+	}
+	if strings.Contains(js, "scheme == 'https' && host == 'api.example.test'") {
+		t.Fatalf("hostname shorthand should not route HTTPS when CA is not trusted, got:\n%s", js)
+	}
+}
+
 func TestGenerateUsesExactPortsForFullOrigins(t *testing.T) {
 	entry, err := domain.ParseEntry("http://api.example.test:8081")
 	if err != nil {

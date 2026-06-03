@@ -22,7 +22,7 @@ import (
 func Start(stdout, _ io.Writer, overrides config.Overrides) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return StartWithContext(ctx, stdout, overrides, platform.NoopAdapter{})
+	return StartWithContext(ctx, stdout, overrides, platform.CurrentAdapter)
 }
 
 func StartWithContext(ctx context.Context, stdout io.Writer, overrides config.Overrides, adapter platform.Adapter) error {

@@ -32,17 +32,19 @@ func Generate(opts Options) string {
 		if entry.Scheme == "https" && !opts.CATrusted {
 			continue
 		}
-		writeRule(&b, entry, opts.ProxyListen)
+		writeRule(&b, entry, opts.ProxyListen, opts.CATrusted)
 	}
 	b.WriteString("  return 'DIRECT';\n")
 	b.WriteString("}\n")
 	return b.String()
 }
 
-func writeRule(b *strings.Builder, entry domain.Entry, proxyListen string) {
+func writeRule(b *strings.Builder, entry domain.Entry, proxyListen string, caTrusted bool) {
 	var checks []string
 	if entry.Scheme != "" {
 		checks = append(checks, fmt.Sprintf("scheme == '%s'", entry.Scheme))
+	} else if !caTrusted {
+		checks = append(checks, "scheme == 'http'")
 	}
 	if entry.Port != "" {
 		checks = append(checks, fmt.Sprintf("urlPort == '%s'", entry.Port))

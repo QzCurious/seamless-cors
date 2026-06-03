@@ -13,3 +13,5 @@ func (NoopAdapter) InstallPAC(string) error { return nil }
 func (NoopAdapter) RestoreProxy() error     { return nil }
 func (NoopAdapter) TrustCA([]byte) error    { return nil }
 func (NoopAdapter) RemoveCA() error         { return nil }
+
+var CurrentAdapter Adapter = NoopAdapter{}
