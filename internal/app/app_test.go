@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"cors-vpn/internal/config"
+	"cors-vpn/internal/control"
 	"cors-vpn/internal/domain"
 )
 
@@ -39,9 +40,8 @@ func (f *fakeAdapter) RemoveCA() error {
 	return nil
 }
 
-func TestStartGuidanceShowsEditableFilesForManagedSystemProxy(t *testing.T) {
+func TestStartGuidanceShowsEditableFilesAndManagedPAC(t *testing.T) {
 	cfg := config.Default()
-	cfg.ManagedSystemProxy = true
 	var out bytes.Buffer
 
 	writeStartGuidance(&out, config.LoadResult{
@@ -53,39 +53,12 @@ func TestStartGuidanceShowsEditableFilesForManagedSystemProxy(t *testing.T) {
 	got := out.String()
 	want := "Transparent CORS Gateway running\n" +
 		"config: /Users/example/.cors-gateway/config.yaml\n" +
-		"domain-list: /Users/example/.cors-gateway/domains.txt\n"
+		"domain-list: /Users/example/.cors-gateway/domains.txt\n" +
+		"managed-pac: active\n"
 	if got != want {
 		t.Fatalf("start guidance = %q", got)
 	}
 	for _, unwanted := range []string{"proxy-listen:", "pac-listen:", "control-listen:"} {
-		if strings.Contains(got, unwanted) {
-			t.Fatalf("start guidance included %q:\n%s", unwanted, got)
-		}
-	}
-}
-
-func TestStartGuidanceShowsProxyListenerForManualProxyMode(t *testing.T) {
-	cfg := config.Default()
-	cfg.ManagedSystemProxy = false
-	var out bytes.Buffer
-
-	writeStartGuidance(&out, config.LoadResult{
-		Config:        cfg,
-		ConfigPath:    "/Users/example/.cors-gateway/config.yaml",
-		DomainPath:    "/Users/example/.cors-gateway/domains.txt",
-		OverrideNames: []string{"managed-system-proxy"},
-	})
-
-	got := out.String()
-	want := "Transparent CORS Gateway running\n" +
-		"config: /Users/example/.cors-gateway/config.yaml\n" +
-		"domain-list: /Users/example/.cors-gateway/domains.txt\n" +
-		"proxy-listen: 127.0.0.1:8080\n" +
-		"one-run overrides: managed-system-proxy\n"
-	if got != want {
-		t.Fatalf("start guidance = %q", got)
-	}
-	for _, unwanted := range []string{"pac-listen:", "control-listen:"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("start guidance included %q:\n%s", unwanted, got)
 		}
@@ -98,10 +71,6 @@ func TestRuntimeUsesAdapterAndCleansUpLifecycleState(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
-	cfg.ProxyListen = "127.0.0.1:0"
-	cfg.PACListen = "127.0.0.1:0"
-	cfg.ControlListen = "127.0.0.1:0"
-	cfg.ManagedSystemProxy = true
 	cfg.CATrusted = true
 	fake := &fakeAdapter{}
 	runtime, err := NewRuntime(cfg, []domain.Entry{entry}, fake, &bytes.Buffer{})
@@ -157,6 +126,46 @@ func TestStatusAndStopDoNotBootstrapMissingConfig(t *testing.T) {
 	}
 }
 
+func TestStatusReportsStaleRuntimeStateWithoutCleanup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	statePath := writeStaleRuntimeState(t)
+
+	var out bytes.Buffer
+	if err := Status(&out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "not running") {
+		t.Fatalf("status output = %q", out.String())
+	}
+	if !strings.Contains(out.String(), "stale runtime state detected") {
+		t.Fatalf("status output = %q", out.String())
+	}
+	if _, err := os.Stat(statePath); err != nil {
+		t.Fatalf("status removed runtime state: %v", err)
+	}
+}
+
+func TestStopCleansStaleRuntimeState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	statePath := writeStaleRuntimeState(t)
+
+	var out bytes.Buffer
+	if err := Stop(&out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "no running gateway found") {
+		t.Fatalf("stop output = %q", out.String())
+	}
+	if !strings.Contains(out.String(), "cleaned stale gateway runtime state") {
+		t.Fatalf("stop output = %q", out.String())
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("stale runtime state still exists: %v", err)
+	}
+}
+
 func TestRuntimeRejectsSecondUserInstance(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -165,10 +174,6 @@ func TestRuntimeRejectsSecondUserInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
-	cfg.ProxyListen = "127.0.0.1:0"
-	cfg.PACListen = "127.0.0.1:0"
-	cfg.ControlListen = "127.0.0.1:0"
-	cfg.ManagedSystemProxy = false
 
 	first, err := NewRuntime(cfg, []domain.Entry{entry}, &fakeAdapter{}, &bytes.Buffer{})
 	if err != nil {
@@ -178,7 +183,8 @@ func TestRuntimeRejectsSecondUserInstance(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- first.Serve(ctx) }()
-	waitForFile(t, filepath.Join(home, ".cors-gateway", "runtime", "instance-lock"))
+	waitForFile(t, filepath.Join(home, ".cors-gateway", "runtime", "control-state.json"))
+	waitForStatusOutput(t, "Transparent CORS Gateway status: running")
 
 	second, err := NewRuntime(cfg, []domain.Entry{entry}, &fakeAdapter{}, &bytes.Buffer{})
 	if err != nil {
@@ -210,10 +216,6 @@ func TestRuntimeReloadsDomainListIntoGeneratedPAC(t *testing.T) {
 		t.Fatalf("domain errors = %v", errs)
 	}
 	cfg := config.Default()
-	cfg.ProxyListen = "127.0.0.1:0"
-	cfg.PACListen = "127.0.0.1:0"
-	cfg.ControlListen = "127.0.0.1:0"
-	cfg.ManagedSystemProxy = false
 	cfg.DomainList = domainPath
 
 	runtime, err := NewRuntime(cfg, entries, &fakeAdapter{}, &bytes.Buffer{})
@@ -255,10 +257,6 @@ func TestRuntimeIgnoresInvalidLiveDomainList(t *testing.T) {
 		t.Fatalf("domain errors = %v", errs)
 	}
 	cfg := config.Default()
-	cfg.ProxyListen = "127.0.0.1:0"
-	cfg.PACListen = "127.0.0.1:0"
-	cfg.ControlListen = "127.0.0.1:0"
-	cfg.ManagedSystemProxy = false
 	cfg.DomainList = domainPath
 
 	runtime, err := NewRuntime(cfg, entries, &fakeAdapter{}, &bytes.Buffer{})
@@ -305,10 +303,6 @@ func TestRuntimeLiveConfigPreservesDomainListOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
-	cfg.ProxyListen = "127.0.0.1:0"
-	cfg.PACListen = "127.0.0.1:0"
-	cfg.ControlListen = "127.0.0.1:0"
-	cfg.ManagedSystemProxy = false
 	cfg.DomainList = configDomainPath
 	cfg.SourcePath = configPath
 	writeConfigForRuntime(t, configPath, cfg)
@@ -337,10 +331,6 @@ func TestRuntimeLiveConfigPreservesDomainListOverride(t *testing.T) {
 	waitForHTTPBody(t, pacURL, "override-one.example.test")
 
 	changed := config.Default()
-	changed.ProxyListen = "127.0.0.1:0"
-	changed.PACListen = "127.0.0.1:0"
-	changed.ControlListen = "127.0.0.1:0"
-	changed.ManagedSystemProxy = false
 	changed.DomainList = configDomainPath
 	changed.SourcePath = configPath
 	changed.CATrusted = true
@@ -378,10 +368,6 @@ func TestRuntimeStopsOnInvalidLiveConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
-	cfg.ProxyListen = "127.0.0.1:0"
-	cfg.PACListen = "127.0.0.1:0"
-	cfg.ControlListen = "127.0.0.1:0"
-	cfg.ManagedSystemProxy = false
 	cfg.DomainList = domainPath
 	cfg.SourcePath = configPath
 
@@ -418,10 +404,6 @@ func TestStatusReportsPendingLifecycleChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
-	cfg.ProxyListen = "127.0.0.1:0"
-	cfg.PACListen = "127.0.0.1:0"
-	cfg.ControlListen = "127.0.0.1:0"
-	cfg.ManagedSystemProxy = false
 	cfg.DomainList = domainPath
 	cfg.SourcePath = configPath
 	writeConfigForRuntime(t, configPath, cfg)
@@ -453,16 +435,31 @@ func TestStatusReportsPendingLifecycleChanges(t *testing.T) {
 
 func writeConfigForRuntime(t *testing.T, path string, cfg config.Config) {
 	t.Helper()
-	text := "proxy-listen: " + cfg.ProxyListen + "\n" +
-		"pac-listen: " + cfg.PACListen + "\n" +
-		"control-listen: " + cfg.ControlListen + "\n" +
-		"managed-system-proxy: false\n" +
-		"domain-list: " + cfg.DomainList + "\n" +
+	text := "domain-list: " + cfg.DomainList + "\n" +
 		"log-level: " + cfg.LogLevel + "\n" +
 		"ca-trusted: " + map[bool]string{true: "true", false: "false"}[cfg.CATrusted] + "\n"
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeStaleRuntimeState(t *testing.T) string {
+	t.Helper()
+	runtimeDir, err := config.RuntimeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(runtimeDir, "control-state.json")
+	err = control.WriteRuntimeState(statePath, control.RuntimeState{
+		State: control.State{
+			ControlListen: "127.0.0.1:1",
+		},
+		Token: "stale-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return statePath
 }
 
 func waitForFile(t *testing.T, path string) {

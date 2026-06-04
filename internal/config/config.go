@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,14 +11,10 @@ import (
 )
 
 type Config struct {
-	ProxyListen        string `yaml:"proxy-listen"`
-	PACListen          string `yaml:"pac-listen"`
-	ControlListen      string `yaml:"control-listen"`
-	ManagedSystemProxy bool   `yaml:"managed-system-proxy"`
-	DomainList         string `yaml:"domain-list"`
-	LogLevel           string `yaml:"log-level"`
-	CATrusted          bool   `yaml:"ca-trusted"`
-	SourcePath         string `yaml:"-"`
+	DomainList string `yaml:"domain-list"`
+	LogLevel   string `yaml:"log-level"`
+	CATrusted  bool   `yaml:"ca-trusted"`
+	SourcePath string `yaml:"-"`
 }
 
 const DefaultConfigFileName = "config.yaml"
@@ -34,26 +29,17 @@ type LoadResult struct {
 }
 
 type Overrides struct {
-	ProxyListen           string
-	PACListen             string
-	ControlListen         string
-	ManagedSystemProxy    bool
-	ManagedSystemProxySet bool
-	DomainList            string
-	LogLevel              string
-	CATrusted             bool
-	CATrustedSet          bool
+	DomainList   string
+	LogLevel     string
+	CATrusted    bool
+	CATrustedSet bool
 }
 
 func Default() Config {
 	return Config{
-		ProxyListen:        "127.0.0.1:8080",
-		PACListen:          "127.0.0.1:8079",
-		ControlListen:      "127.0.0.1:8078",
-		ManagedSystemProxy: true,
-		DomainList:         "~/.cors-gateway/domains.txt",
-		LogLevel:           "info",
-		CATrusted:          false,
+		DomainList: "~/.cors-gateway/domains.txt",
+		LogLevel:   "info",
+		CATrusted:  false,
 	}
 }
 
@@ -165,18 +151,6 @@ func LoadExisting(configPath string, overrides Overrides) (LoadResult, error) {
 }
 
 func ApplyOverrides(cfg Config, overrides Overrides) Config {
-	if overrides.ProxyListen != "" {
-		cfg.ProxyListen = overrides.ProxyListen
-	}
-	if overrides.PACListen != "" {
-		cfg.PACListen = overrides.PACListen
-	}
-	if overrides.ControlListen != "" {
-		cfg.ControlListen = overrides.ControlListen
-	}
-	if overrides.ManagedSystemProxySet {
-		cfg.ManagedSystemProxy = overrides.ManagedSystemProxy
-	}
 	if overrides.DomainList != "" {
 		cfg.DomainList = overrides.DomainList
 	}
@@ -191,18 +165,6 @@ func ApplyOverrides(cfg Config, overrides Overrides) Config {
 
 func (o Overrides) Names() []string {
 	var names []string
-	if o.ProxyListen != "" {
-		names = append(names, "proxy-listen")
-	}
-	if o.PACListen != "" {
-		names = append(names, "pac-listen")
-	}
-	if o.ControlListen != "" {
-		names = append(names, "control-listen")
-	}
-	if o.ManagedSystemProxySet {
-		names = append(names, "managed-system-proxy")
-	}
 	if o.DomainList != "" {
 		names = append(names, "domain-list")
 	}
@@ -216,15 +178,6 @@ func (o Overrides) Names() []string {
 }
 
 func Validate(cfg Config) error {
-	for name, address := range map[string]string{
-		"proxy-listen":   cfg.ProxyListen,
-		"pac-listen":     cfg.PACListen,
-		"control-listen": cfg.ControlListen,
-	} {
-		if _, _, err := net.SplitHostPort(address); err != nil {
-			return fmt.Errorf("%s must be a host:port listener address: %w", name, err)
-		}
-	}
 	if cfg.DomainList == "" {
 		return fmt.Errorf("domain-list is required")
 	}
@@ -265,19 +218,7 @@ func bootstrap(configPath string) error {
 }
 
 func commentedDefaultConfig() string {
-	return `# Local proxy endpoint used by PAC and Manual Proxy Mode.
-proxy-listen: 127.0.0.1:8080
-
-# Local endpoint that serves the generated PAC file.
-pac-listen: 127.0.0.1:8079
-
-# Local endpoint used by status and stop.
-control-listen: 127.0.0.1:8078
-
-# When true, macOS/Windows use PAC routing for matched domains.
-managed-system-proxy: true
-
-# One domain or origin per line.
+	return `# One domain or origin per line.
 domain-list: ~/.cors-gateway/domains.txt
 
 # Logging verbosity. Copy one of these values into the active setting:

@@ -32,14 +32,6 @@ _Avoid_: user-authored PAC, manual PAC rules
 A local HTTP endpoint served by the gateway that returns the current Generated PAC.
 _Avoid_: file PAC, static PAC file
 
-**Manual Proxy Mode**:
-A traffic capture approach where the gateway exposes a local proxy endpoint and the user configures their browser, operating system, or test tool to use it.
-_Avoid_: unmanaged mode, custom routing
-
-**Untouched HTTPS Tunnel**:
-A Manual Proxy Mode behavior where HTTPS traffic that is not eligible for Trusted HTTPS Interception is forwarded without inspection or repair.
-_Avoid_: rejected CONNECT, accidental HTTPS interception
-
 **Default Upstream Negotiation**:
 A gateway transport behavior where upstream HTTP protocol selection uses the Go runtime's normal negotiation instead of forcing a specific upstream protocol.
 _Avoid_: forced HTTP/1.1 upstream, guaranteed HTTP/2 feature
@@ -74,11 +66,7 @@ _Avoid_: cross-platform binary
 
 **Managed Platform**:
 A supported operating system where the gateway can configure PAC Routing and user trust on behalf of the user.
-_Avoid_: universal managed support, all-platform parity
-
-**Manual Platform**:
-A supported operating system where the gateway can run locally but the user must configure proxy routing manually.
-_Avoid_: unsupported platform
+_Avoid_: manual platform, manual proxy fallback, all-platform parity without adapters
 
 **User-Trusted Development CA**:
 A local certificate authority trusted only in the current user's trust store so the gateway can inspect HTTPS traffic for configured upstream domains during DEV/QA work.
@@ -116,6 +104,10 @@ _Avoid_: manual reload, restart requirement, stale configuration
 A configuration behavior where a valid config file is applied as a whole and an invalid config file is rejected without partially changing gateway behavior.
 _Avoid_: partial config application, half-applied config
 
+**Lenient Configuration Shape**:
+A clean-break configuration behavior where only current settings affect gateway behavior and unknown settings are ignored without aliases, migration, or old-version-specific handling.
+_Avoid_: backward-compatible alias, migration, obsolete-setting special case
+
 **Fatal Config Error**:
 A configuration behavior where an invalid config file causes the gateway to log the validation problem, perform Graceful Cleanup, and stop.
 _Avoid_: silent config fallback, stale config after invalid edit
@@ -124,29 +116,25 @@ _Avoid_: silent config fallback, stale config after invalid edit
 A gateway operation chosen explicitly through a command or start-time flag because it can affect OS proxy settings, listener binding, or certificate authority identity.
 _Avoid_: live OS reconfiguration, config-triggered permission prompt
 
-**Fixed Listener Ports**:
-A lifecycle behavior where default proxy and PAC listener ports are stable and startup fails if they are unavailable.
-_Avoid_: automatic port switching
+**Automatic Listeners**:
+A lifecycle behavior where the gateway chooses available loopback ports for its proxy, PAC, and control endpoints at startup, then wires dependent runtime state in sequence.
+_Avoid_: user-selected listener ports, fixed listener ports, manual listener addresses
 
 **Loopback Default**:
-A listener behavior where proxy and PAC endpoints bind to loopback by default, with warnings for explicitly configured non-loopback listeners.
-_Avoid_: LAN-exposed default proxy
+A listener behavior where gateway endpoints bind to loopback.
+_Avoid_: LAN-exposed proxy, user-selected bind address
 
 **Control Endpoint**:
 A separate loopback endpoint used by gateway commands such as stop and status, protected by runtime state rather than mixed into browser proxy traffic.
 _Avoid_: proxy-path admin command, public control API
 
 **Proxy Listener**:
-The browser-facing local proxy endpoint configured as `proxy-listen`.
-_Avoid_: generic listen, gatewayListen
-
-**Listener Address**:
-A lifecycle configuration value written as `host:port` for local proxy, PAC, or control listeners.
-_Avoid_: listener URL, scheme-bearing listener config
+A local proxy endpoint used by PAC Routing to send matched browser traffic through the gateway.
+_Avoid_: manual proxy endpoint, browser setup address, generic listen, gatewayListen
 
 **Explicit Configuration**:
-The complete user-editable gateway configuration, including both live request policy and lifecycle settings.
-_Avoid_: hidden defaults, flag-only configuration
+The complete user-editable gateway configuration, including live request policy and lifecycle settings but excluding runtime-selected listener addresses.
+_Avoid_: hidden user settings, flag-only configuration, listener address configuration
 
 **Path Expansion**:
 A configuration behavior where path fields support home-directory and environment-variable expansion.
@@ -160,29 +148,37 @@ _Avoid_: platform-native app config directory
 The durable runtime and recovery state location under the Home Config Directory.
 _Avoid_: temp runtime state, volatile recovery state
 
+**Runtime State File**:
+A durable runtime record that signals a possible active gateway instance, including the automatic Control Endpoint needed by `stop` and `status`.
+_Avoid_: pid-only lock file, configured control address, in-memory instance registry
+
+**Runtime State Verification**:
+A startup behavior where an existing Runtime State File is checked against its Control Endpoint before the gateway treats another instance as active.
+_Avoid_: file-exists-is-running, port-only lock, stale state as active instance
+
 **Marker-Based Recovery**:
 A recovery behavior that cleans only proxy or CA state proven to belong to a previous gateway run by runtime markers.
 _Avoid_: guessed recovery, broad OS state cleanup
 
 **Single User Instance**:
-A runtime rule where only one gateway process may run for a user at a time.
-_Avoid_: multi-instance gateway, competing PAC state
+A runtime rule where only one gateway process may run for a user at a time, with the Runtime State File used as the first signal that an instance may already be active.
+_Avoid_: multi-instance gateway, competing PAC state, port-based instance detection
 
 **One-Run Override**:
-A start-time flag that overrides Explicit Configuration only for the current gateway process and is shown clearly in status.
-_Avoid_: hidden config mutation, persistent flag change
+A start-time flag for a current Explicit Configuration setting that overrides it only for the current gateway process and is shown clearly in status.
+_Avoid_: hidden config mutation, persistent flag change, obsolete flag handling
 
 **First-Start Bootstrap**:
 A startup behavior where missing default config and Domain List files are created automatically before validation continues.
 _Avoid_: init command, manual file scaffolding
 
 **Commented Default Config**:
-A First-Start Bootstrap behavior where generated configuration includes short comments for user-editable settings.
-_Avoid_: opaque default config, verbose manual
+A First-Start Bootstrap behavior where generated configuration includes short comments only for meaningful user-editable settings.
+_Avoid_: opaque default config, verbose manual, runtime listener settings
 
 **Start Guidance**:
-A start-time user-facing output behavior where successful start output points first to the editable Explicit Configuration and Domain List, and shows the Proxy Listener only when Manual Proxy Mode makes it directly actionable.
-_Avoid_: listener-first start output, PAC listener summary, control listener summary
+A start-time user-facing output behavior where successful start output points to the editable Explicit Configuration, Domain List, and managed PAC state instead of runtime listener endpoints.
+_Avoid_: listener-first start output, proxy setup instructions, PAC listener summary, control listener summary
 
 **Pending Lifecycle Change**:
 A lifecycle setting change detected while the gateway is running that is reported to the user but not applied automatically.
@@ -216,13 +212,21 @@ _Avoid_: daemon mode, background start
 A gateway shutdown behavior triggered by Ctrl-C, stop command, or normal termination that restores proxy settings and performs Full CA Removal.
 _Avoid_: manual cleanup, abandoned lifecycle state
 
+**Stale Runtime Cleanup**:
+A lifecycle behavior where `start` or `stop` removes stale Runtime State File data and gateway-owned proxy or CA markers after Runtime State Verification finds no active gateway.
+_Avoid_: status cleanup, broad cleanup, file-only deletion
+
 **Human Status**:
 A status output intended for interactive DEV/QA use rather than machine-readable automation.
 _Avoid_: JSON status, scripting API
 
 **Read-Only Status**:
-A status behavior that reports gateway and recovery state without changing proxy settings, CA trust, or runtime files.
+A status behavior that reports gateway and recovery state, including stale Runtime State File detection, without changing proxy settings, CA trust, or runtime files.
 _Avoid_: status-triggered cleanup, mutating status command
+
+**Diagnostic Runtime Endpoint**:
+An automatically selected listener address shown by status for troubleshooting, not for user proxy setup or configuration.
+_Avoid_: setup address, configured listener, manual proxy instruction
 
 **Full URL Logging**:
 A diagnostic behavior where request logs include full URLs, including query strings, for DEV/QA debugging.
@@ -380,11 +384,7 @@ QA engineer: "The PAC Endpoint serves the current Generated PAC, so routing upda
 
 Developer: "Can I avoid changing my system proxy settings?"
 
-QA engineer: "Yes, use Manual Proxy Mode and point only the browser or test tool at the local proxy endpoint."
-
-Developer: "What happens to HTTPS traffic in Manual Proxy Mode when interception is disabled?"
-
-QA engineer: "Untouched HTTPS Tunnel keeps it forwarding without inspection or repair."
+QA engineer: "No, the gateway uses Managed System Proxy so application requests keep their original URLs."
 
 Developer: "Does the gateway force HTTP/1.1 upstream?"
 
@@ -436,7 +436,7 @@ QA engineer: "CA Recovery removes leftover Ephemeral User CA trust and files on 
 
 Developer: "Will every operating system have the same managed setup in v1?"
 
-QA engineer: "No, Managed Platforms get automated PAC Routing while Manual Platforms can still run the gateway locally."
+QA engineer: "Every supported platform needs a managed PAC adapter; platforms without one are not supported yet."
 
 Developer: "After I update the Domain List, do I need to restart the gateway?"
 
@@ -445,6 +445,10 @@ QA engineer: "No, Live Configuration applies the newest values to incoming reque
 Developer: "What happens if I save an invalid config file while the gateway is running?"
 
 QA engineer: "Fatal Config Error logs the validation problem, performs Graceful Cleanup, and stops the gateway."
+
+Developer: "What if my config still has removed listener or managed-proxy settings?"
+
+QA engineer: "Lenient Configuration Shape treats them like any other unknown settings, so they do not affect gateway behavior."
 
 Developer: "Do I need a command for every setting?"
 
@@ -462,6 +466,10 @@ Developer: "Does Ctrl-C clean up the proxy and CA?"
 
 QA engineer: "Yes, Graceful Cleanup runs on Ctrl-C and the stop command."
 
+Developer: "What if stop finds only stale runtime state?"
+
+QA engineer: "Stale Runtime Cleanup removes gateway-owned state and reports that no running gateway was found."
+
 Developer: "Is status intended for scripts?"
 
 QA engineer: "No, Human Status is optimized for interactive understanding."
@@ -469,6 +477,14 @@ QA engineer: "No, Human Status is optimized for interactive understanding."
 Developer: "Can status change proxy or CA state?"
 
 QA engineer: "No, Read-Only Status reports state without performing cleanup."
+
+Developer: "Why does status show listener addresses if I cannot configure them?"
+
+QA engineer: "Diagnostic Runtime Endpoint values are shown for troubleshooting, not setup."
+
+Developer: "What if status finds a stale Runtime State File?"
+
+QA engineer: "Read-Only Status reports that the gateway is not running and leaves cleanup to start or stop."
 
 Developer: "Will logs include query strings?"
 
@@ -486,25 +502,21 @@ Developer: "Can editing configuration unexpectedly trigger an OS permission prom
 
 QA engineer: "No, lifecycle settings live in Explicit Configuration but become a Pending Lifecycle Change while the gateway is running."
 
-Developer: "What happens if the default port is already in use?"
+Developer: "What happens if a default listener port is already in use?"
 
-QA engineer: "Fixed Listener Ports makes startup fail clearly instead of silently choosing another port."
+QA engineer: "Automatic Listeners choose available loopback ports at startup."
 
 Developer: "Can other machines use my gateway by default?"
 
-QA engineer: "No, Loopback Default keeps listener endpoints local unless explicitly changed."
+QA engineer: "No, Loopback Default keeps listener endpoints local."
 
 Developer: "Do stop and status go through the proxy listener?"
 
 QA engineer: "No, Control Endpoint keeps command traffic separate from browser proxy traffic."
 
-Developer: "Which listener do browsers use?"
+Developer: "Do I need to know which listener browsers use?"
 
-QA engineer: "Proxy Listener is the browser-facing endpoint."
-
-Developer: "Are listener settings URLs?"
-
-QA engineer: "No, Listener Address values are `host:port` bind addresses."
+QA engineer: "No, PAC Routing connects browsers to the Proxy Listener through managed proxy settings."
 
 Developer: "How do pending lifecycle changes take effect?"
 
@@ -520,7 +532,7 @@ QA engineer: "Proxy Chaining preserves supported existing proxy settings by rout
 
 Developer: "What do I need to configure before starting?"
 
-QA engineer: "Explicit Configuration contains the full setup, while the Domain List stays as the easy one-domain-per-line file."
+QA engineer: "Explicit Configuration contains the meaningful user settings, while the Domain List stays as the easy one-domain-per-line file."
 
 Developer: "Where do config files live by default?"
 
@@ -530,13 +542,21 @@ Developer: "Where does crash recovery state live?"
 
 QA engineer: "Runtime State Directory keeps recovery state durable under the Home Config Directory."
 
+Developer: "How do stop and status find the running gateway?"
+
+QA engineer: "They read the Runtime State File to find the active Control Endpoint."
+
+Developer: "Does a Runtime State File always mean the gateway is still running?"
+
+QA engineer: "No, Runtime State Verification checks the Control Endpoint before treating it as an active instance."
+
 Developer: "Will recovery modify state just because it looks suspicious?"
 
 QA engineer: "No, Marker-Based Recovery acts only on state proven by gateway runtime markers."
 
 Developer: "Can I run two gateways at once?"
 
-QA engineer: "No, Single User Instance keeps proxy, CA, and recovery state coherent."
+QA engineer: "No, Single User Instance uses the Runtime State File to guard proxy, CA, and recovery state."
 
 Developer: "Do start flags edit my config file?"
 

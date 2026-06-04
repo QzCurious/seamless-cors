@@ -15,13 +15,12 @@ import (
 )
 
 type State struct {
-	ProxyListen        string   `json:"proxyListen"`
-	PACListen          string   `json:"pacListen"`
-	ControlListen      string   `json:"controlListen"`
-	ManagedSystemProxy bool     `json:"managedSystemProxy"`
-	CATrusted          bool     `json:"caTrusted"`
-	DomainCount        int      `json:"domainCount"`
-	PendingLifecycle   []string `json:"pendingLifecycle,omitempty"`
+	ProxyListen      string   `json:"proxyListen"`
+	PACListen        string   `json:"pacListen"`
+	ControlListen    string   `json:"controlListen"`
+	CATrusted        bool     `json:"caTrusted"`
+	DomainCount      int      `json:"domainCount"`
+	PendingLifecycle []string `json:"pendingLifecycle,omitempty"`
 }
 
 type RuntimeState struct {
@@ -90,7 +89,13 @@ func WriteRuntimeState(path string, state RuntimeState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.Write(data)
+	return err
 }
 
 func ReadRuntimeState(path string) (RuntimeState, error) {
@@ -105,28 +110,40 @@ func ReadRuntimeState(path string) (RuntimeState, error) {
 	return state, nil
 }
 
-func CallStatus(baseURL, token string, stdout io.Writer) error {
+func FetchStatus(baseURL, token string) (State, error) {
 	req, err := http.NewRequest(http.MethodGet, baseURL+"/status", nil)
 	if err != nil {
-		return err
+		return State{}, err
 	}
 	req.Header.Set("X-CORS-Gateway-Token", token)
-	resp, err := http.DefaultClient.Do(req)
+	client := http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := client.Do(req)
+	if err != nil {
+		return State{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return State{}, fmt.Errorf("status endpoint returned %s", resp.Status)
+	}
+	var state State
+	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+		return State{}, err
+	}
+	return state, nil
+}
+
+func CallStatus(baseURL, token string, stdout io.Writer) error {
+	state, err := FetchStatus(baseURL, token)
 	if err != nil {
 		fmt.Fprintln(stdout, "Transparent CORS Gateway status: not running")
 		return nil
 	}
-	defer resp.Body.Close()
-	var state State
-	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
-		return err
-	}
 	fmt.Fprintln(stdout, "Transparent CORS Gateway status: running")
-	fmt.Fprintf(stdout, "proxy-listen: %s\n", state.ProxyListen)
-	fmt.Fprintf(stdout, "pac-listen: %s\n", state.PACListen)
-	fmt.Fprintf(stdout, "control-listen: %s\n", state.ControlListen)
+	fmt.Fprintf(stdout, "runtime-proxy-endpoint: %s\n", state.ProxyListen)
+	fmt.Fprintf(stdout, "runtime-pac-endpoint: %s\n", state.PACListen)
+	fmt.Fprintf(stdout, "runtime-control-endpoint: %s\n", state.ControlListen)
 	fmt.Fprintf(stdout, "domains: %d\n", state.DomainCount)
-	fmt.Fprintf(stdout, "managed-system-proxy: %t\n", state.ManagedSystemProxy)
+	fmt.Fprintln(stdout, "managed-pac: active")
 	fmt.Fprintf(stdout, "ca-trusted: %t\n", state.CATrusted)
 	if len(state.PendingLifecycle) > 0 {
 		fmt.Fprintf(stdout, "pending lifecycle changes: %s\n", strings.Join(state.PendingLifecycle, ", "))
@@ -134,22 +151,27 @@ func CallStatus(baseURL, token string, stdout io.Writer) error {
 	return nil
 }
 
-func CallStop(baseURL, token string, stdout io.Writer) error {
-	resp, err := postWithToken(baseURL+"/stop", token)
+func CallStop(baseURL, token string, stdout io.Writer) (bool, error) {
+	client := http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := postWithToken(client, baseURL+"/stop", token)
 	if err != nil {
 		fmt.Fprintln(stdout, "Transparent CORS Gateway stop requested; no running gateway found")
-		return nil
+		return false, nil
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		fmt.Fprintln(stdout, "Transparent CORS Gateway stop requested; no running gateway found")
+		return false, nil
+	}
 	fmt.Fprintln(stdout, "Transparent CORS Gateway stop requested")
-	return nil
+	return true, nil
 }
 
-func postWithToken(url, token string) (*http.Response, error) {
+func postWithToken(client http.Client, url, token string) (*http.Response, error) {
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("X-CORS-Gateway-Token", token)
-	return http.DefaultClient.Do(req)
+	return client.Do(req)
 }

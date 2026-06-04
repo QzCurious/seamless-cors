@@ -9,28 +9,32 @@ import (
 
 func TestDefaultConfigMatchesPRD(t *testing.T) {
 	cfg := Default()
-	if cfg.ProxyListen != "127.0.0.1:8080" {
-		t.Fatalf("ProxyListen = %q", cfg.ProxyListen)
+	if cfg.DomainList != "~/.cors-gateway/domains.txt" {
+		t.Fatalf("DomainList = %q", cfg.DomainList)
 	}
-	if cfg.PACListen != "127.0.0.1:8079" {
-		t.Fatalf("PACListen = %q", cfg.PACListen)
-	}
-	if cfg.ControlListen != "127.0.0.1:8078" {
-		t.Fatalf("ControlListen = %q", cfg.ControlListen)
-	}
-	if !cfg.ManagedSystemProxy {
-		t.Fatalf("ManagedSystemProxy = false")
+	if cfg.LogLevel != "info" {
+		t.Fatalf("LogLevel = %q", cfg.LogLevel)
 	}
 	if cfg.CATrusted {
 		t.Fatalf("CATrusted = true")
 	}
 }
 
-func TestValidateRejectsListenerURL(t *testing.T) {
-	cfg := Default()
-	cfg.ProxyListen = "http://127.0.0.1:8080"
-	if err := Validate(cfg); err == nil {
-		t.Fatal("expected listener URL to fail validation")
+func TestLoadIgnoresUnknownConfigKeys(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configPath := filepath.Join(home, "config.yaml")
+	domainPath := filepath.Join(home, "domains.txt")
+	if err := os.WriteFile(configPath, []byte("proxy-listen: 127.0.0.1:8080\nmanaged-system-proxy: false\ndomain-list: "+domainPath+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadExisting(configPath, Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.DomainPath != domainPath {
+		t.Fatalf("domain path = %q", loaded.DomainPath)
 	}
 }
 
@@ -40,7 +44,6 @@ func TestLoadOrBootstrapCreatesCommentedDefaultsAndAppliesOverrides(t *testing.T
 	var out bytes.Buffer
 
 	loaded, err := LoadOrBootstrap("", Overrides{
-		ProxyListen:  "127.0.0.1:18080",
 		CATrusted:    true,
 		CATrustedSet: true,
 	}, &out)
@@ -49,9 +52,6 @@ func TestLoadOrBootstrapCreatesCommentedDefaultsAndAppliesOverrides(t *testing.T
 	}
 	if !loaded.Bootstrapped {
 		t.Fatal("expected first-start bootstrap")
-	}
-	if loaded.Config.ProxyListen != "127.0.0.1:18080" {
-		t.Fatalf("proxy-listen = %q", loaded.Config.ProxyListen)
 	}
 	if !loaded.Config.CATrusted {
 		t.Fatal("ca-trusted override was not applied")
@@ -63,7 +63,10 @@ func TestLoadOrBootstrapCreatesCommentedDefaultsAndAppliesOverrides(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(configText, []byte("# Local proxy endpoint")) {
+	if bytes.Contains(configText, []byte("listen")) || bytes.Contains(configText, []byte("managed-system-proxy")) {
+		t.Fatalf("generated config included runtime settings:\n%s", configText)
+	}
+	if !bytes.Contains(configText, []byte("# One domain or origin per line.")) {
 		t.Fatalf("generated config is not commented:\n%s", configText)
 	}
 	for _, line := range []string{

@@ -10,12 +10,11 @@ import (
 
 func TestControlEndpointReportsHumanStatusAndAcceptsStop(t *testing.T) {
 	server := New(State{
-		ProxyListen:        "127.0.0.1:8080",
-		PACListen:          "127.0.0.1:8079",
-		ControlListen:      "127.0.0.1:0",
-		ManagedSystemProxy: true,
-		CATrusted:          false,
-		DomainCount:        2,
+		ProxyListen:   "127.0.0.1:8080",
+		PACListen:     "127.0.0.1:8079",
+		ControlListen: "127.0.0.1:0",
+		CATrusted:     false,
+		DomainCount:   2,
 	}, "secret-token")
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -32,6 +31,9 @@ func TestControlEndpointReportsHumanStatusAndAcceptsStop(t *testing.T) {
 	if !strings.Contains(out.String(), "Transparent CORS Gateway status: running") {
 		t.Fatalf("status output = %q", out.String())
 	}
+	if !strings.Contains(out.String(), "runtime-proxy-endpoint: 127.0.0.1:8080") {
+		t.Fatalf("status output = %q", out.String())
+	}
 	resp, err := http.Post(base+"/stop", "text/plain", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +43,7 @@ func TestControlEndpointReportsHumanStatusAndAcceptsStop(t *testing.T) {
 		t.Fatalf("unauthenticated stop status = %d", resp.StatusCode)
 	}
 
-	resp, err = postWithToken(base+"/stop", "secret-token")
+	resp, err = postWithToken(http.Client{}, base+"/stop", "secret-token")
 	if err != nil {
 		t.Fatal(err)
 	}

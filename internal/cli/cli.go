@@ -48,10 +48,6 @@ func parseOverrides(args []string) (config.Overrides, error) {
 	flags.SetOutput(io.Discard)
 
 	var overrides config.Overrides
-	flags.StringVar(&overrides.ProxyListen, "proxy-listen", "", "proxy listener address")
-	flags.StringVar(&overrides.PACListen, "pac-listen", "", "PAC listener address")
-	flags.StringVar(&overrides.ControlListen, "control-listen", "", "control listener address")
-	flags.BoolVar(&overrides.ManagedSystemProxy, "managed-system-proxy", false, "manage system proxy settings")
 	flags.BoolVar(&overrides.CATrusted, "ca-trusted", false, "trust ephemeral development CA for this run")
 	flags.StringVar(&overrides.DomainList, "domain-list", "", "domain list path")
 	flags.StringVar(&overrides.LogLevel, "log-level", "", "log level")
@@ -60,7 +56,6 @@ func parseOverrides(args []string) (config.Overrides, error) {
 		return config.Overrides{}, err
 	}
 
-	overrides.ManagedSystemProxySet = flags.Changed("managed-system-proxy")
 	overrides.CATrustedSet = flags.Changed("ca-trusted")
 	return overrides, nil
 }

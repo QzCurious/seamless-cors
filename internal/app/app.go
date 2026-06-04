@@ -60,9 +60,7 @@ func writeStartGuidance(stdout io.Writer, loaded config.LoadResult) {
 	fmt.Fprintf(stdout, "Transparent CORS Gateway running\n")
 	fmt.Fprintf(stdout, "config: %s\n", loaded.ConfigPath)
 	fmt.Fprintf(stdout, "domain-list: %s\n", loaded.DomainPath)
-	if !loaded.Config.ManagedSystemProxy {
-		fmt.Fprintf(stdout, "proxy-listen: %s\n", loaded.Config.ProxyListen)
-	}
+	fmt.Fprintln(stdout, "managed-pac: active")
 	if len(loaded.OverrideNames) > 0 {
 		fmt.Fprintf(stdout, "one-run overrides: %s\n", strings.Join(loaded.OverrideNames, ", "))
 	}
@@ -83,9 +81,7 @@ type Runtime struct {
 	listeners        []net.Listener
 	token            string
 	runtimeDir       string
-	lockPath         string
 	statePath        string
-	lockAcquired     bool
 	overrides        config.Overrides
 	pendingLifecycle []string
 }
@@ -97,20 +93,20 @@ func NewRuntime(cfg config.Config, entries []domain.Entry, adapter platform.Adap
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("Domain List has no active entries")
 	}
-	proxyListener, err := net.Listen("tcp", cfg.ProxyListen)
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, fmt.Errorf("proxy-listen %s unavailable: %w", cfg.ProxyListen, err)
+		return nil, fmt.Errorf("proxy listener unavailable: %w", err)
 	}
-	pacListener, err := net.Listen("tcp", cfg.PACListen)
+	pacListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		proxyListener.Close()
-		return nil, fmt.Errorf("pac-listen %s unavailable: %w", cfg.PACListen, err)
+		return nil, fmt.Errorf("PAC listener unavailable: %w", err)
 	}
-	controlListener, err := net.Listen("tcp", cfg.ControlListen)
+	controlListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		proxyListener.Close()
 		pacListener.Close()
-		return nil, fmt.Errorf("control-listen %s unavailable: %w", cfg.ControlListen, err)
+		return nil, fmt.Errorf("control listener unavailable: %w", err)
 	}
 
 	runtimeDir, err := config.RuntimeDir()
@@ -135,12 +131,11 @@ func NewRuntime(cfg config.Config, entries []domain.Entry, adapter platform.Adap
 	pacBody := pac.Generate(pac.Options{ProxyListen: proxyListen, CATrusted: cfg.CATrusted, Entries: entries})
 	pacHandler := pac.NewDynamicHandler(pacBody)
 	controlServer := control.New(control.State{
-		ProxyListen:        proxyListen,
-		PACListen:          pacListen,
-		ControlListen:      controlListen,
-		ManagedSystemProxy: cfg.ManagedSystemProxy,
-		CATrusted:          cfg.CATrusted,
-		DomainCount:        len(entries),
+		ProxyListen:   proxyListen,
+		PACListen:     pacListen,
+		ControlListen: controlListen,
+		CATrusted:     cfg.CATrusted,
+		DomainCount:   len(entries),
 	}, token)
 	return &Runtime{
 		cfg:        cfg,
@@ -155,13 +150,12 @@ func NewRuntime(cfg config.Config, entries []domain.Entry, adapter platform.Adap
 		listeners:  []net.Listener{proxyListener, pacListener, controlListener},
 		token:      token,
 		runtimeDir: runtimeDir,
-		lockPath:   filepath.Join(runtimeDir, "instance-lock"),
 		statePath:  filepath.Join(runtimeDir, "control-state.json"),
 	}, nil
 }
 
 func (r *Runtime) Serve(ctx context.Context) error {
-	if err := r.acquireInstanceLock(); err != nil {
+	if err := r.ensureSingleInstance(); err != nil {
 		r.Close()
 		return err
 	}
@@ -169,15 +163,17 @@ func (r *Runtime) Serve(ctx context.Context) error {
 		State: r.controlState(),
 		Token: r.token,
 	}
-	if err := control.WriteRuntimeState(r.statePath, state); err != nil {
+	if err := r.writeRuntimeState(state); err != nil {
 		r.Close()
 		return err
 	}
-	if r.cfg.ManagedSystemProxy {
-		if err := r.adapter.InstallPAC("http://" + r.listeners[1].Addr().String() + "/proxy.pac"); err != nil {
-			r.Close()
-			return err
-		}
+
+	errs := make(chan error, 4)
+	go func() { errs <- r.control.Serve(r.listeners[2]) }()
+
+	if err := r.adapter.InstallPAC("http://" + r.listeners[1].Addr().String() + "/proxy.pac"); err != nil {
+		r.Close()
+		return err
 	}
 	if r.cfg.CATrusted {
 		authority, err := ca.Create(r.runtimeDir, r.adapter)
@@ -189,12 +185,10 @@ func (r *Runtime) Serve(ctx context.Context) error {
 		r.proxyCore.SetAuthority(authority)
 	}
 
-	errs := make(chan error, 4)
 	go r.watchLiveDomainList(ctx)
 	go r.watchLiveConfig(ctx, errs)
 	go func() { errs <- r.proxy.Serve(r.listeners[0]) }()
 	go func() { errs <- r.pac.Serve(r.listeners[1]) }()
-	go func() { errs <- r.control.Serve(r.listeners[2]) }()
 
 	select {
 	case <-ctx.Done():
@@ -214,15 +208,9 @@ func (r *Runtime) Close() error {
 	_ = r.proxy.Close()
 	_ = r.pac.Close()
 	_ = r.control.Close(ctx)
-	if r.cfg.ManagedSystemProxy {
-		_ = r.adapter.RestoreProxy()
-	}
+	_ = r.adapter.RestoreProxy()
 	_ = ca.Remove(r.authority, r.adapter)
 	_ = os.Remove(r.statePath)
-	if r.lockAcquired {
-		_ = os.Remove(r.lockPath)
-		r.lockAcquired = false
-	}
 	return nil
 }
 
@@ -232,7 +220,14 @@ func Stop(stdout, _ io.Writer) error {
 		fmt.Fprintln(stdout, "Transparent CORS Gateway stop requested; no running gateway found")
 		return nil
 	}
-	return control.CallStop("http://"+state.ControlListen, state.Token, stdout)
+	stopped, err := control.CallStop("http://"+state.ControlListen, state.Token, stdout)
+	if err != nil {
+		return err
+	}
+	if !stopped {
+		staleRuntimeCleanup(state, stdout, platform.CurrentAdapter)
+	}
+	return nil
 }
 
 func Status(stdout, _ io.Writer) error {
@@ -241,7 +236,13 @@ func Status(stdout, _ io.Writer) error {
 		fmt.Fprintln(stdout, "Transparent CORS Gateway status: not running")
 		return nil
 	}
-	return control.CallStatus("http://"+state.ControlListen, state.Token, stdout)
+	if err := control.CallStatus("http://"+state.ControlListen, state.Token, stdout); err != nil {
+		return err
+	}
+	if _, err := control.FetchStatus("http://"+state.ControlListen, state.Token); err != nil {
+		fmt.Fprintln(stdout, "stale runtime state detected; run start or stop to clean up")
+	}
+	return nil
 }
 
 func loadDomainList(path string) ([]domain.Entry, []domain.LineError, error) {
@@ -261,24 +262,40 @@ func formatDomainErrors(errs []domain.LineError) string {
 	return strings.Join(lines, "\n")
 }
 
-func (r *Runtime) acquireInstanceLock() error {
+func (r *Runtime) ensureSingleInstance() error {
 	if err := os.MkdirAll(r.runtimeDir, 0o700); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(r.lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	state, err := control.ReadRuntimeState(r.statePath)
 	if err != nil {
-		if os.IsExist(err) {
-			return fmt.Errorf("Transparent CORS Gateway is already running")
+		if os.IsNotExist(err) {
+			return nil
 		}
-		return err
+		_ = os.Remove(r.statePath)
+		return nil
 	}
-	defer file.Close()
-	if _, err := fmt.Fprintf(file, "%d\n", os.Getpid()); err != nil {
-		_ = os.Remove(r.lockPath)
-		return err
+	if runtimeStateIsActive(state) {
+		return fmt.Errorf("Transparent CORS Gateway is already running")
 	}
-	r.lockAcquired = true
+	staleRuntimeCleanup(state, r.stdout, r.adapter)
 	return nil
+}
+
+func (r *Runtime) writeRuntimeState(state control.RuntimeState) error {
+	if err := control.WriteRuntimeState(r.statePath, state); err == nil {
+		return nil
+	} else if !os.IsExist(err) {
+		return err
+	}
+	existing, err := control.ReadRuntimeState(r.statePath)
+	if err != nil {
+		return err
+	}
+	if runtimeStateIsActive(existing) {
+		return fmt.Errorf("Transparent CORS Gateway is already running")
+	}
+	staleRuntimeCleanup(existing, r.stdout, r.adapter)
+	return control.WriteRuntimeState(r.statePath, state)
 }
 
 func (r *Runtime) watchLiveDomainList(ctx context.Context) {
@@ -377,30 +394,17 @@ func (r *Runtime) controlState() control.State {
 
 func (r *Runtime) controlStateLocked() control.State {
 	return control.State{
-		ProxyListen:        r.listeners[0].Addr().String(),
-		PACListen:          r.listeners[1].Addr().String(),
-		ControlListen:      r.listeners[2].Addr().String(),
-		ManagedSystemProxy: r.cfg.ManagedSystemProxy,
-		CATrusted:          r.cfg.CATrusted,
-		DomainCount:        len(r.entries),
-		PendingLifecycle:   append([]string(nil), r.pendingLifecycle...),
+		ProxyListen:      r.listeners[0].Addr().String(),
+		PACListen:        r.listeners[1].Addr().String(),
+		ControlListen:    r.listeners[2].Addr().String(),
+		CATrusted:        r.cfg.CATrusted,
+		DomainCount:      len(r.entries),
+		PendingLifecycle: append([]string(nil), r.pendingLifecycle...),
 	}
 }
 
 func (r *Runtime) lifecycleChangesLocked(next config.Config) []string {
 	var pending []string
-	if next.ProxyListen != r.cfg.ProxyListen {
-		pending = append(pending, "proxy-listen")
-	}
-	if next.PACListen != r.cfg.PACListen {
-		pending = append(pending, "pac-listen")
-	}
-	if next.ControlListen != r.cfg.ControlListen {
-		pending = append(pending, "control-listen")
-	}
-	if next.ManagedSystemProxy != r.cfg.ManagedSystemProxy {
-		pending = append(pending, "managed-system-proxy")
-	}
 	if next.CATrusted != r.cfg.CATrusted {
 		pending = append(pending, "ca-trusted")
 	}
@@ -427,4 +431,33 @@ func randomToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes[:]), nil
+}
+
+func staleRuntimeCleanup(state control.RuntimeState, stdout io.Writer, adapter platform.Adapter) {
+	runtimeDir, err := config.RuntimeDir()
+	if err != nil {
+		return
+	}
+	_ = adapter.RestoreProxy()
+	_ = ca.Recover(filepath.Join(runtimeDir, "ca-marker.json"), adapter)
+	_ = os.Remove(filepath.Join(runtimeDir, "control-state.json"))
+	if stdout != nil && state.ControlListen != "" {
+		fmt.Fprintln(stdout, "cleaned stale gateway runtime state")
+	}
+}
+
+func runtimeStateIsActive(state control.RuntimeState) bool {
+	if state.ControlListen == "" || state.Token == "" {
+		return false
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		if _, err := control.FetchStatus("http://"+state.ControlListen, state.Token); err == nil {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

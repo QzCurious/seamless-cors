@@ -12,7 +12,7 @@ type Adapter interface {
 type NoopAdapter struct{}
 
 func (NoopAdapter) InstallPAC(string) error {
-	return fmt.Errorf("managed system proxy is unsupported on this platform; set managed-system-proxy: false and configure proxy-listen manually")
+	return fmt.Errorf("managed PAC routing is unsupported on this platform")
 }
 func (NoopAdapter) RestoreProxy() error  { return nil }
 func (NoopAdapter) TrustCA([]byte) error { return nil }
