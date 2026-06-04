@@ -7,11 +7,21 @@ import (
 	"strings"
 )
 
+// Entry is one normalized Domain List rule.
 type Entry struct {
-	Raw      string
-	Scheme   string
-	Host     string
-	Port     string
+	// Raw is the original non-comment Domain List text.
+	Raw string
+
+	// Scheme restricts matches to "http" or "https" when set.
+	Scheme string
+
+	// Host is the normalized lowercase hostname, or leading wildcard hostname.
+	Host string
+
+	// Port restricts matches to a specific port when set.
+	Port string
+
+	// Wildcard reports whether Host starts with "*.".
 	Wildcard bool
 }
 

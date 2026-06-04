@@ -6,25 +6,32 @@ func TestParseListSupportsCommentsAndMatching(t *testing.T) {
 	entries, errs := ParseList(`
 # staging
 api.example.test # exact
+API.EXAMPLE.TEST
 *.qa.example.test
 https://localhost:9443
 `)
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errors: %v", errs)
 	}
-	if len(entries) != 3 {
+	if len(entries) != 4 {
 		t.Fatalf("entries = %d", len(entries))
 	}
 	if !entries[0].Matches("https", "api.example.test", "443") {
 		t.Fatal("hostname shorthand should match any scheme and port")
 	}
-	if !entries[1].Matches("https", "one.qa.example.test", "443") {
+	if entries[1].Host != "api.example.test" {
+		t.Fatalf("uppercase hostname should be normalized, got %q", entries[1].Host)
+	}
+	if !entries[1].Matches("http", "API.EXAMPLE.TEST", "3333") {
+		t.Fatal("matching should ignore host case")
+	}
+	if !entries[2].Matches("https", "one.qa.example.test", "443") {
 		t.Fatal("wildcard should match one label")
 	}
-	if entries[1].Matches("https", "two.one.qa.example.test", "443") {
+	if entries[2].Matches("https", "two.one.qa.example.test", "443") {
 		t.Fatal("wildcard should not match two labels")
 	}
-	if !entries[2].Matches("https", "localhost", "9443") {
+	if !entries[3].Matches("https", "localhost", "9443") {
 		t.Fatal("full origin should match exact scheme host port")
 	}
 }
