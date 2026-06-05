@@ -1,4 +1,4 @@
-module cors-vpn
+module seamless-cors
 
 go 1.22
 

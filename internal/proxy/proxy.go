@@ -13,9 +13,9 @@ import (
 	"strings"
 	"sync"
 
-	"cors-vpn/internal/ca"
-	"cors-vpn/internal/cors"
-	"cors-vpn/internal/domain"
+	"seamless-cors/internal/ca"
+	"seamless-cors/internal/cors"
+	"seamless-cors/internal/domain"
 )
 
 type Options struct {

@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"cors-vpn/internal/app"
-	"cors-vpn/internal/config"
+	"seamless-cors/internal/app"
+	"seamless-cors/internal/config"
 )
 
 const usage = `Usage:

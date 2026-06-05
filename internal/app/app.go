@@ -16,13 +16,13 @@ import (
 	"syscall"
 	"time"
 
-	"cors-vpn/internal/ca"
-	"cors-vpn/internal/config"
-	"cors-vpn/internal/control"
-	"cors-vpn/internal/domain"
-	"cors-vpn/internal/pac"
-	"cors-vpn/internal/platform"
-	"cors-vpn/internal/proxy"
+	"seamless-cors/internal/ca"
+	"seamless-cors/internal/config"
+	"seamless-cors/internal/control"
+	"seamless-cors/internal/domain"
+	"seamless-cors/internal/pac"
+	"seamless-cors/internal/platform"
+	"seamless-cors/internal/proxy"
 )
 
 func Start(stdout, _ io.Writer, overrides config.Overrides) error {

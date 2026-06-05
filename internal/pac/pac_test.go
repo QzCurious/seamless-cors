@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"cors-vpn/internal/domain"
+	"seamless-cors/internal/domain"
 )
 
 func TestGenerateUsesTrustAwareHTTPSRouting(t *testing.T) {

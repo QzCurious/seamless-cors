@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"cors-vpn/internal/domain"
+	"seamless-cors/internal/domain"
 )
 
 type Options struct {

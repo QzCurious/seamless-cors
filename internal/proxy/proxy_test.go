@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"cors-vpn/internal/ca"
-	"cors-vpn/internal/domain"
-	"cors-vpn/internal/platform"
+	"seamless-cors/internal/ca"
+	"seamless-cors/internal/domain"
+	"seamless-cors/internal/platform"
 )
 
 func TestHTTPProxyForwardsMatchedRequestsAndRepairsAllStatuses(t *testing.T) {

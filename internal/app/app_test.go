@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"cors-vpn/internal/config"
-	"cors-vpn/internal/control"
-	"cors-vpn/internal/domain"
+	"seamless-cors/internal/config"
+	"seamless-cors/internal/control"
+	"seamless-cors/internal/domain"
 )
 
 type fakeAdapter struct {

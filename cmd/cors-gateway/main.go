@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"cors-vpn/internal/cli"
+	"seamless-cors/internal/cli"
 )
 
 func main() {

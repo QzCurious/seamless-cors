@@ -1,12 +1,12 @@
-# CORS VPN
+# seamless-cors
 
-CORS VPN is a DEV/QA context for controlled browser-origin testing across configured upstream domains.
+seamless-cors is a DEV/QA context for controlled browser-origin testing across configured upstream domains.
 
 ## Language
 
 **Transparent CORS Gateway**:
 A local DEV/QA network tool that sits between the browser and configured upstream domains so browser requests can be tested under adjusted cross-origin behavior without changing application request URLs.
-_Avoid_: CORS VPN, generic proxy, CORS middleware
+_Avoid_: seamless-cors, generic proxy, CORS middleware
 
 **Managed System Proxy**:
 A traffic capture approach where the gateway configures the operating system or browser proxy settings on behalf of the user, so application requests keep their original URLs and no manual proxy setup is required.

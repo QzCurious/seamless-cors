@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"cors-vpn/internal/platform"
-	"cors-vpn/internal/recovery"
+	"seamless-cors/internal/platform"
+	"seamless-cors/internal/recovery"
 )
 
 type EphemeralAuthority struct {
