@@ -1,6 +1,11 @@
 package platform
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+var ErrTrustApprovalDenied = errors.New("certificate trust approval denied")
 
 type Adapter interface {
 	InstallPAC(url string) error

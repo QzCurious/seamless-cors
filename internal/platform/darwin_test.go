@@ -3,12 +3,15 @@
 package platform
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
 
 type fakeRunner struct {
 	calls []string
+	err   error
+	out   []byte
 }
 
 func (f *fakeRunner) run(name string, args ...string) ([]byte, error) {
@@ -19,7 +22,7 @@ func (f *fakeRunner) run(name string, args ...string) ([]byte, error) {
 	case "-getautoproxyurl":
 		return []byte("URL: http://old.example/proxy.pac\nEnabled: Yes\n"), nil
 	default:
-		return []byte{}, nil
+		return f.out, f.err
 	}
 }
 
@@ -44,6 +47,29 @@ func TestDarwinAdapterInstallsPACAndRestoresPreviousAutoProxy(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing call %q in:\n%s", want, joined)
 		}
+	}
+}
+
+func TestDarwinAdapterMapsTrustApprovalCancellation(t *testing.T) {
+	runner := &fakeRunner{
+		out: []byte("SecTrustSettingsSetTrustSettings: The authorization was canceled by the user."),
+		err: errors.New("exit status 1"),
+	}
+	adapter := &DarwinAdapter{runner: runner, keychainPath: "/tmp/login.keychain-db"}
+	certPEM := []byte(`-----BEGIN CERTIFICATE-----
+MIIBhTCCASugAwIBAgIBATAKBggqhkjOPQQDAjAUMRIwEAYDVQQDEwlkZXYtdGVz
+dDAeFw0yNjAxMDEwMDAwMDBaFw0yNjAxMDIwMDAwMDBaMBQxEjAQBgNVBAMTCWRl
+di10ZXN0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVm7vdnHl4ppQq91cHjbB
+BiYUDhmY3ar6+P0gq0LrFs5vKiRbP+RlYoDx6K6P4iW22JwdAC3PeEGGhIOZLaNN
+MEswDgYDVR0PAQH/BAQDAgEGMA8GA1UdEwEB/wQFMAMBAf8wKAYDVR0RBCEwH4IJ
+ZGV2LXRlc3SHBH8AAAGHEAAAAAAAAAAAAAAAAAAAAAEwCgYIKoZIzj0EAwIDSAAw
+RQIhAOoa4X7HjCOTEOEdPAQRxIhH3WETktsEOl3ZK9otm64jAiBEfd+WY1KcU6RC
+3EpP1QovunMjInSJ/ksZrQPrLEpe7g==
+-----END CERTIFICATE-----
+`)
+
+	if err := adapter.TrustCA(certPEM); !errors.Is(err, ErrTrustApprovalDenied) {
+		t.Fatalf("trust error = %v", err)
 	}
 }
 

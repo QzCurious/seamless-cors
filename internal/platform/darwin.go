@@ -104,6 +104,9 @@ func (a *DarwinAdapter) TrustCA(certPEM []byte) error {
 	}
 	keychain := a.keychain()
 	_, err = a.security("add-trusted-cert", "-d", "-r", "trustRoot", "-k", keychain, a.certPath)
+	if isTrustApprovalDenied(err) {
+		return fmt.Errorf("%w: %w", ErrTrustApprovalDenied, err)
+	}
 	return err
 }
 
@@ -185,4 +188,16 @@ func (a *DarwinAdapter) keychain() string {
 		return "login.keychain-db"
 	}
 	return filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+}
+
+func isTrustApprovalDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "authorization was canceled") ||
+		strings.Contains(text, "authorization was cancelled") ||
+		strings.Contains(text, "authorization has been denied") ||
+		strings.Contains(text, "user canceled") ||
+		strings.Contains(text, "user cancelled")
 }

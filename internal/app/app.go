@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,15 +24,21 @@ import (
 	"seamless-cors/internal/pac"
 	"seamless-cors/internal/platform"
 	"seamless-cors/internal/proxy"
+
+	"golang.org/x/term"
 )
 
 func Start(stdout, _ io.Writer, overrides config.Overrides) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return StartWithContext(ctx, stdout, overrides, platform.CurrentAdapter)
+	return StartWithContextAndInput(ctx, os.Stdin, stdout, overrides, platform.CurrentAdapter)
 }
 
 func StartWithContext(ctx context.Context, stdout io.Writer, overrides config.Overrides, adapter platform.Adapter) error {
+	return StartWithContextAndInput(ctx, nil, stdout, overrides, adapter)
+}
+
+func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Writer, overrides config.Overrides, adapter platform.Adapter) error {
 	loaded, err := config.LoadOrBootstrap("", overrides, stdout)
 	if err != nil {
 		return err
@@ -45,6 +52,11 @@ func StartWithContext(ctx context.Context, stdout io.Writer, overrides config.Ov
 	}
 	if len(entries) == 0 {
 		return fmt.Errorf("Domain List has no active entries; add at least one domain to %s", loaded.DomainPath)
+	}
+	if loaded.Config.CATrusted {
+		if err := promptForCATrust(stdin, stdout); err != nil {
+			return err
+		}
 	}
 
 	runtime, err := NewRuntime(loaded.Config, entries, adapter, stdout)
@@ -64,6 +76,44 @@ func writeStartGuidance(stdout io.Writer, loaded config.LoadResult) {
 	if len(loaded.OverrideNames) > 0 {
 		fmt.Fprintf(stdout, "one-run overrides: %s\n", strings.Join(loaded.OverrideNames, ", "))
 	}
+}
+
+func promptForCATrust(stdin io.Reader, stdout io.Writer) error {
+	fmt.Fprintln(stdout, "ca-trusted: true requires adding the local CA certificate to the system trust settings.")
+	fmt.Fprintln(stdout, "You will see a system prompt asking for administrator approval to make this change.")
+	fmt.Fprintln(stdout)
+	fmt.Fprint(stdout, "Press any key to continue...")
+	if err := waitForKey(stdin); err != nil {
+		fmt.Fprintln(stdout)
+		return err
+	}
+	fmt.Fprintln(stdout)
+	return nil
+}
+
+func waitForKey(stdin io.Reader) error {
+	if stdin == nil {
+		return nil
+	}
+	if file, ok := stdin.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
+		oldState, err := term.MakeRaw(int(file.Fd()))
+		if err != nil {
+			return err
+		}
+		defer term.Restore(int(file.Fd()), oldState)
+	}
+	var buf [1]byte
+	n, err := stdin.Read(buf[:])
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if n > 0 && buf[0] == 0x03 {
+		return context.Canceled
+	}
+	return err
 }
 
 type Runtime struct {
@@ -179,10 +229,15 @@ func (r *Runtime) Serve(ctx context.Context) error {
 		authority, err := ca.Create(r.runtimeDir, r.adapter)
 		if err != nil {
 			r.Close()
+			if errors.Is(err, platform.ErrTrustApprovalDenied) {
+				fmt.Fprintln(r.stdout, "Certificate trust was not approved.")
+				fmt.Fprintln(r.stdout, "Run the command again and approve the system prompt, or set ca-trusted: false.")
+			}
 			return err
 		}
 		r.authority = authority
 		r.proxyCore.SetAuthority(authority)
+		fmt.Fprintln(r.stdout, "Local CA certificate added to the system trust settings.")
 	}
 
 	go r.watchLiveDomainList(ctx)

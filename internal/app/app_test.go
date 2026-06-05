@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"seamless-cors/internal/config"
 	"seamless-cors/internal/control"
 	"seamless-cors/internal/domain"
+	"seamless-cors/internal/platform"
 )
 
 type fakeAdapter struct {
@@ -21,6 +23,7 @@ type fakeAdapter struct {
 	restored     int
 	trusted      int
 	removed      int
+	trustErr     error
 }
 
 func (f *fakeAdapter) InstallPAC(url string) error {
@@ -33,7 +36,7 @@ func (f *fakeAdapter) RestoreProxy() error {
 }
 func (f *fakeAdapter) TrustCA([]byte) error {
 	f.trusted++
-	return nil
+	return f.trustErr
 }
 func (f *fakeAdapter) RemoveCA() error {
 	f.removed++
@@ -65,6 +68,34 @@ func TestStartGuidanceShowsEditableFilesAndManagedPAC(t *testing.T) {
 	}
 }
 
+func TestCATrustPromptWaitsWithApprovedCopy(t *testing.T) {
+	var out bytes.Buffer
+
+	if err := promptForCATrust(bytes.NewBufferString("x"), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "ca-trusted: true requires adding the local CA certificate to the system trust settings.\n" +
+		"You will see a system prompt asking for administrator approval to make this change.\n" +
+		"\n" +
+		"Press any key to continue...\n"
+	if out.String() != want {
+		t.Fatalf("CA trust prompt = %q", out.String())
+	}
+}
+
+func TestCATrustPromptTreatsCtrlCAsCancel(t *testing.T) {
+	var out bytes.Buffer
+
+	err := promptForCATrust(bytes.NewBuffer([]byte{0x03}), &out)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("prompt error = %v", err)
+	}
+	if !strings.HasSuffix(out.String(), "Press any key to continue...\n") {
+		t.Fatalf("prompt output = %q", out.String())
+	}
+}
+
 func TestRuntimeUsesAdapterAndCleansUpLifecycleState(t *testing.T) {
 	entry, err := domain.ParseEntry("api.example.test")
 	if err != nil {
@@ -73,7 +104,8 @@ func TestRuntimeUsesAdapterAndCleansUpLifecycleState(t *testing.T) {
 	cfg := config.Default()
 	cfg.CATrusted = true
 	fake := &fakeAdapter{}
-	runtime, err := NewRuntime(cfg, []domain.Entry{entry}, fake, &bytes.Buffer{})
+	var out bytes.Buffer
+	runtime, err := NewRuntime(cfg, []domain.Entry{entry}, fake, &out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +127,35 @@ func TestRuntimeUsesAdapterAndCleansUpLifecycleState(t *testing.T) {
 	}
 	if fake.removed != 1 {
 		t.Fatalf("remove calls = %d", fake.removed)
+	}
+	if !strings.Contains(out.String(), "Local CA certificate added to the system trust settings.") {
+		t.Fatalf("success output = %q", out.String())
+	}
+}
+
+func TestRuntimePrintsCancelMessageWhenTrustApprovalDenied(t *testing.T) {
+	entry, err := domain.ParseEntry("api.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.CATrusted = true
+	fake := &fakeAdapter{trustErr: platform.ErrTrustApprovalDenied}
+	var out bytes.Buffer
+	runtime, err := NewRuntime(cfg, []domain.Entry{entry}, fake, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = runtime.Serve(context.Background())
+	if !errors.Is(err, platform.ErrTrustApprovalDenied) {
+		t.Fatalf("serve error = %v", err)
+	}
+
+	want := "Certificate trust was not approved.\n" +
+		"Run the command again and approve the system prompt, or set ca-trusted: false.\n"
+	if out.String() != want {
+		t.Fatalf("cancel output = %q", out.String())
 	}
 }
 
