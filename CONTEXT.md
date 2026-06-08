@@ -113,7 +113,7 @@ A configuration behavior where an invalid config file causes the gateway to log 
 _Avoid_: silent config fallback, stale config after invalid edit
 
 **Lifecycle Operation**:
-A gateway operation chosen explicitly through a command or start-time flag because it can affect OS proxy settings, listener binding, or certificate authority identity.
+A gateway operation chosen explicitly through a command or start-time flag because it can affect OS proxy settings or certificate authority identity.
 _Avoid_: live OS reconfiguration, config-triggered permission prompt
 
 **Automatic Listeners**:
@@ -165,7 +165,7 @@ A runtime rule where only one gateway process may run for a user at a time, with
 _Avoid_: multi-instance gateway, competing PAC state, port-based instance detection
 
 **One-Run Override**:
-A start-time flag for a current Explicit Configuration setting that overrides it only for the current gateway process and is shown clearly in status.
+A start-time flag for a current Explicit Configuration setting that overrides it only for the current gateway process.
 _Avoid_: hidden config mutation, persistent flag change, obsolete flag handling
 
 **First-Start Bootstrap**:
@@ -181,11 +181,11 @@ A start-time user-facing output behavior where successful start output points to
 _Avoid_: listener-first start output, proxy setup instructions, PAC listener summary, control listener summary
 
 **Pending Lifecycle Change**:
-A lifecycle setting change detected while the gateway is running that is reported to the user but not applied automatically.
+A restart-applied Explicit Configuration change detected while the gateway is running and reported to the user without being applied automatically.
 _Avoid_: surprise permission prompt, implicit restart
 
 **Restart-Applied Lifecycle**:
-A lifecycle behavior where pending changes to OS proxy management, listener binding, or certificate authority identity take effect only after the gateway is restarted.
+A lifecycle behavior where Pending Lifecycle Changes take effect only after the gateway is restarted.
 _Avoid_: apply-lifecycle command, hot lifecycle swap
 
 **Proxy Recovery**:
@@ -237,7 +237,7 @@ A diagnostic behavior where every request routed through the gateway because of 
 _Avoid_: repair-only logging, error-only logging
 
 **Unmatched Quiet Mode**:
-A diagnostic behavior where unmatched traffic is not logged in Managed System Proxy mode and is logged only at debug level in Manual Proxy Mode.
+A diagnostic behavior where unmatched traffic is not logged during Managed System Proxy operation.
 _Avoid_: noisy unmatched logging, unrelated browsing logs
 
 **Domain List**:

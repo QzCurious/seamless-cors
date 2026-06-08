@@ -21,8 +21,8 @@ func TestParseOverridesSupportsCurrentFlags(t *testing.T) {
 	}
 }
 
-func TestParseOverridesRejectsRemovedFlagsAsUnknown(t *testing.T) {
-	_, err := parseOverrides([]string{"--managed-system-proxy=false"})
+func TestParseOverridesRejectsUnknownFlags(t *testing.T) {
+	_, err := parseOverrides([]string{"--unknown-setting=false"})
 	if err == nil {
 		t.Fatal("expected removed flag to be unknown")
 	}

@@ -13,6 +13,8 @@ func TestControlEndpointReportsHumanStatusAndAcceptsStop(t *testing.T) {
 		ProxyListen:   "127.0.0.1:8080",
 		PACListen:     "127.0.0.1:8079",
 		ControlListen: "127.0.0.1:0",
+		DomainList:    "/Users/example/.seamless-cors/domains.txt",
+		LogLevel:      "debug",
 		CATrusted:     false,
 		DomainCount:   2,
 	}, "secret-token")
@@ -33,6 +35,14 @@ func TestControlEndpointReportsHumanStatusAndAcceptsStop(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "runtime-proxy-endpoint: 127.0.0.1:8080") {
 		t.Fatalf("status output = %q", out.String())
+	}
+	for _, want := range []string{
+		"domain-list: /Users/example/.seamless-cors/domains.txt",
+		"log-level: debug",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("status output missing %q: %q", want, out.String())
+		}
 	}
 	resp, err := http.Post(base+"/stop", "text/plain", nil)
 	if err != nil {

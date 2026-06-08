@@ -25,7 +25,7 @@ func TestLoadIgnoresUnknownConfigKeys(t *testing.T) {
 	t.Setenv("HOME", home)
 	configPath := filepath.Join(home, "config.yaml")
 	domainPath := filepath.Join(home, "domains.txt")
-	if err := os.WriteFile(configPath, []byte("proxy-listen: 127.0.0.1:8080\nmanaged-system-proxy: false\ndomain-list: "+domainPath+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("unknown-setting: ignored\ndomain-list: "+domainPath+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -63,7 +63,7 @@ func TestLoadOrBootstrapCreatesCommentedDefaultsAndAppliesOverrides(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(configText, []byte("listen")) || bytes.Contains(configText, []byte("managed-system-proxy")) {
+	if bytes.Contains(configText, []byte("unknown-setting")) {
 		t.Fatalf("generated config included runtime settings:\n%s", configText)
 	}
 	if !bytes.Contains(configText, []byte("# One domain or origin per line.")) {

@@ -184,6 +184,8 @@ func NewRuntime(cfg config.Config, entries []domain.Entry, adapter platform.Adap
 		ProxyListen:   proxyListen,
 		PACListen:     pacListen,
 		ControlListen: controlListen,
+		DomainList:    cfg.DomainList,
+		LogLevel:      cfg.LogLevel,
 		CATrusted:     cfg.CATrusted,
 		DomainCount:   len(entries),
 	}, token)
@@ -419,6 +421,7 @@ func (r *Runtime) watchLiveConfig(ctx context.Context, errs chan<- error) {
 			r.mu.Lock()
 			r.pendingLifecycle = r.lifecycleChangesLocked(loaded.Config)
 			r.cfg.DomainList = loaded.Config.DomainList
+			r.cfg.LogLevel = loaded.Config.LogLevel
 			state := r.controlStateLocked()
 			r.mu.Unlock()
 			r.control.SetState(state)
@@ -452,6 +455,8 @@ func (r *Runtime) controlStateLocked() control.State {
 		ProxyListen:      r.listeners[0].Addr().String(),
 		PACListen:        r.listeners[1].Addr().String(),
 		ControlListen:    r.listeners[2].Addr().String(),
+		DomainList:       r.cfg.DomainList,
+		LogLevel:         r.cfg.LogLevel,
 		CATrusted:        r.cfg.CATrusted,
 		DomainCount:      len(r.entries),
 		PendingLifecycle: append([]string(nil), r.pendingLifecycle...),

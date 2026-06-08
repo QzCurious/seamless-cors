@@ -61,7 +61,7 @@ func TestStartGuidanceShowsEditableFilesAndManagedPAC(t *testing.T) {
 	if got != want {
 		t.Fatalf("start guidance = %q", got)
 	}
-	for _, unwanted := range []string{"proxy-listen:", "pac-listen:", "control-listen:"} {
+	for _, unwanted := range []string{"runtime-proxy-endpoint:", "runtime-pac-endpoint:", "runtime-control-endpoint:"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("start guidance included %q:\n%s", unwanted, got)
 		}
@@ -390,12 +390,15 @@ func TestRuntimeLiveConfigPreservesDomainListOverride(t *testing.T) {
 
 	pacURL := "http://" + runtime.listeners[1].Addr().String() + "/proxy.pac"
 	waitForHTTPBody(t, pacURL, "override-one.example.test")
+	waitForStatusOutput(t, "domain-list: "+overrideDomainPath)
 
 	changed := config.Default()
 	changed.DomainList = configDomainPath
+	changed.LogLevel = "debug"
 	changed.SourcePath = configPath
 	changed.CATrusted = true
 	writeConfigForRuntime(t, configPath, changed)
+	waitForStatusOutput(t, "log-level: debug")
 	waitForStatusOutput(t, "pending lifecycle changes: ca-trusted")
 
 	if err := os.WriteFile(overrideDomainPath, []byte("override-two.example.test\n"), 0o600); err != nil {
