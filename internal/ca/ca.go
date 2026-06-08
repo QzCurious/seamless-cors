@@ -38,7 +38,7 @@ func Create(dir string, adapter platform.Adapter) (*EphemeralAuthority, error) {
 	}
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(time.Now().UnixNano()),
-		Subject:               pkix.Name{CommonName: "Transparent CORS Gateway Ephemeral User CA"},
+		Subject:               pkix.Name{CommonName: "seamless-cors Ephemeral User CA"},
 		NotBefore:             time.Now().Add(-time.Minute),
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,

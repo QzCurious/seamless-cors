@@ -94,7 +94,7 @@ func (a *DarwinAdapter) TrustCA(certPEM []byte) error {
 	}
 	sum := sha1.Sum(block.Bytes)
 	a.certSHA1 = strings.ToUpper(hex.EncodeToString(sum[:]))
-	dir, err := os.MkdirTemp("", "cors-gateway-ca-*")
+	dir, err := os.MkdirTemp("", "seamless-cors-ca-*")
 	if err != nil {
 		return err
 	}

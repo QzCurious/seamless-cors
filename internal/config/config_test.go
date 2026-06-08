@@ -9,7 +9,7 @@ import (
 
 func TestDefaultConfigMatchesPRD(t *testing.T) {
 	cfg := Default()
-	if cfg.DomainList != "~/.cors-gateway/domains.txt" {
+	if cfg.DomainList != "~/.seamless-cors/domains.txt" {
 		t.Fatalf("DomainList = %q", cfg.DomainList)
 	}
 	if cfg.LogLevel != "info" {
@@ -56,7 +56,7 @@ func TestLoadOrBootstrapCreatesCommentedDefaultsAndAppliesOverrides(t *testing.T
 	if !loaded.Config.CATrusted {
 		t.Fatal("ca-trusted override was not applied")
 	}
-	if loaded.DomainPath != filepath.Join(home, ".cors-gateway", "domains.txt") {
+	if loaded.DomainPath != filepath.Join(home, ".seamless-cors", "domains.txt") {
 		t.Fatalf("domain path = %q", loaded.DomainPath)
 	}
 	configText, err := os.ReadFile(loaded.ConfigPath)

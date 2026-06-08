@@ -69,7 +69,7 @@ func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Wr
 }
 
 func writeStartGuidance(stdout io.Writer, loaded config.LoadResult) {
-	fmt.Fprintf(stdout, "Transparent CORS Gateway running\n")
+	fmt.Fprintf(stdout, "seamless-cors running\n")
 	fmt.Fprintf(stdout, "config: %s\n", loaded.ConfigPath)
 	fmt.Fprintf(stdout, "domain-list: %s\n", loaded.DomainPath)
 	fmt.Fprintln(stdout, "managed-pac: active")
@@ -272,7 +272,7 @@ func (r *Runtime) Close() error {
 func Stop(stdout, _ io.Writer) error {
 	state, err := readRuntimeState()
 	if err != nil {
-		fmt.Fprintln(stdout, "Transparent CORS Gateway stop requested; no running gateway found")
+		fmt.Fprintln(stdout, "seamless-cors stop requested; no running seamless-cors found")
 		return nil
 	}
 	stopped, err := control.CallStop("http://"+state.ControlListen, state.Token, stdout)
@@ -288,7 +288,7 @@ func Stop(stdout, _ io.Writer) error {
 func Status(stdout, _ io.Writer) error {
 	state, err := readRuntimeState()
 	if err != nil {
-		fmt.Fprintln(stdout, "Transparent CORS Gateway status: not running")
+		fmt.Fprintln(stdout, "seamless-cors status: not running")
 		return nil
 	}
 	if err := control.CallStatus("http://"+state.ControlListen, state.Token, stdout); err != nil {
@@ -330,7 +330,7 @@ func (r *Runtime) ensureSingleInstance() error {
 		return nil
 	}
 	if runtimeStateIsActive(state) {
-		return fmt.Errorf("Transparent CORS Gateway is already running")
+		return fmt.Errorf("seamless-cors is already running")
 	}
 	staleRuntimeCleanup(state, r.stdout, r.adapter)
 	return nil
@@ -347,7 +347,7 @@ func (r *Runtime) writeRuntimeState(state control.RuntimeState) error {
 		return err
 	}
 	if runtimeStateIsActive(existing) {
-		return fmt.Errorf("Transparent CORS Gateway is already running")
+		return fmt.Errorf("seamless-cors is already running")
 	}
 	staleRuntimeCleanup(existing, r.stdout, r.adapter)
 	return control.WriteRuntimeState(r.statePath, state)
@@ -497,7 +497,7 @@ func staleRuntimeCleanup(state control.RuntimeState, stdout io.Writer, adapter p
 	_ = ca.Recover(filepath.Join(runtimeDir, "ca-marker.json"), adapter)
 	_ = os.Remove(filepath.Join(runtimeDir, "control-state.json"))
 	if stdout != nil && state.ControlListen != "" {
-		fmt.Fprintln(stdout, "cleaned stale gateway runtime state")
+		fmt.Fprintln(stdout, "cleaned stale seamless-cors runtime state")
 	}
 }
 

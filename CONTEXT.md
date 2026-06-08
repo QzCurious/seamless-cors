@@ -4,7 +4,7 @@ seamless-cors is a DEV/QA context for controlled browser-origin testing across c
 
 ## Language
 
-**Transparent CORS Gateway**:
+**seamless-cors**:
 A local DEV/QA network tool that sits between the browser and configured upstream domains so browser requests can be tested under adjusted cross-origin behavior without changing application request URLs.
 _Avoid_: seamless-cors, generic proxy, CORS middleware
 
@@ -37,7 +37,7 @@ A gateway transport behavior where upstream HTTP protocol selection uses the Go 
 _Avoid_: forced HTTP/1.1 upstream, guaranteed HTTP/2 feature
 
 **Explicit Gateway Error**:
-A gateway-generated failure response that clearly identifies the Transparent CORS Gateway as the source and explains the upstream or lifecycle problem.
+A gateway-generated failure response that clearly identifies seamless-cors as the source and explains the upstream or lifecycle problem.
 _Avoid_: disguised upstream error, silent failure
 
 **CORS-Readable Gateway Error**:
@@ -61,7 +61,7 @@ A gateway behavior where client-side request cancellation closes or cancels the 
 _Avoid_: orphaned upstream request, ignored client disconnect
 
 **Gateway Distribution**:
-The installable form of the Transparent CORS Gateway for a specific operating system and CPU architecture.
+The installable form of seamless-cors for a specific operating system and CPU architecture.
 _Avoid_: cross-platform binary
 
 **Managed Platform**:
@@ -141,7 +141,7 @@ A configuration behavior where path fields support home-directory and environmen
 _Avoid_: arbitrary string expansion
 
 **Home Config Directory**:
-The default user configuration location at `.cors-gateway` under the user's home directory.
+The default user configuration location at `.seamless-cors` under the user's home directory.
 _Avoid_: platform-native app config directory
 
 **Runtime State Directory**:
@@ -358,7 +358,7 @@ _Avoid_: cookie repair, auth bypass, session rewriting
 
 ## Example Dialogue
 
-Developer: "Can I point my browser traffic through the Transparent CORS Gateway for the staging API?"
+Developer: "Can I point my browser traffic through seamless-cors for the staging API?"
 
 QA engineer: "Yes, but only for configured upstream domains so unrelated browsing stays outside the gateway."
 
@@ -536,7 +536,7 @@ QA engineer: "Explicit Configuration contains the meaningful user settings, whil
 
 Developer: "Where do config files live by default?"
 
-QA engineer: "Home Config Directory keeps them under `.cors-gateway` in the user's home directory."
+QA engineer: "Home Config Directory keeps them under `.seamless-cors` in the user's home directory."
 
 Developer: "Where does crash recovery state live?"
 

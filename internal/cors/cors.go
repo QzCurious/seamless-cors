@@ -67,7 +67,7 @@ func WriteGatewayError(w http.ResponseWriter, req *http.Request, status int, typ
 		msg = err.Error()
 	}
 	_ = json.NewEncoder(w).Encode(GatewayError{
-		Source:  "Transparent CORS Gateway",
+		Source:  "seamless-cors",
 		Type:    typ,
 		Message: msg,
 	})

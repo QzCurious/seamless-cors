@@ -37,7 +37,7 @@ type Overrides struct {
 
 func Default() Config {
 	return Config{
-		DomainList: "~/.cors-gateway/domains.txt",
+		DomainList: "~/.seamless-cors/domains.txt",
 		LogLevel:   "info",
 		CATrusted:  false,
 	}
@@ -48,7 +48,7 @@ func HomeDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".cors-gateway"), nil
+	return filepath.Join(home, ".seamless-cors"), nil
 }
 
 func DefaultConfigPath() (string, error) {
@@ -87,7 +87,7 @@ func LoadOrBootstrap(configPath string, overrides Overrides, stdout io.Writer) (
 		bootstrapped = true
 		if stdout != nil {
 			home, _ := HomeDir()
-			fmt.Fprintf(stdout, "Created:\n  %s\n  %s\n\nAdd at least one domain to domains.txt, then run:\n  cors-gateway start\n", configPath, filepath.Join(home, DefaultDomainListFileName))
+			fmt.Fprintf(stdout, "Created:\n  %s\n  %s\n\nAdd at least one domain to domains.txt, then run:\n  seamless-cors start\n", configPath, filepath.Join(home, DefaultDomainListFileName))
 		}
 	}
 
@@ -219,7 +219,7 @@ func bootstrap(configPath string) error {
 
 func commentedDefaultConfig() string {
 	return `# One domain or origin per line.
-domain-list: ~/.cors-gateway/domains.txt
+domain-list: ~/.seamless-cors/domains.txt
 
 # Logging verbosity. Copy one of these values into the active setting:
 # log-level: debug

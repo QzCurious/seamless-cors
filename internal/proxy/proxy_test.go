@@ -106,7 +106,7 @@ func TestProxyGatewayErrorsAreJSONAndCORSReadable(t *testing.T) {
 	if resp.Header.Get("Access-Control-Allow-Origin") != "https://app.local" {
 		t.Fatalf("missing CORS-readable gateway error")
 	}
-	if !strings.Contains(string(body), "Transparent CORS Gateway") {
+	if !strings.Contains(string(body), "seamless-cors") {
 		t.Fatalf("body = %s", body)
 	}
 }

@@ -1,16 +1,16 @@
 Status: ready-for-agent
 
-# Transparent CORS Gateway PRD
+# seamless-cors PRD
 
 ## Problem Statement
 
 Frontend developers and QA engineers often need to run a local frontend against upstream APIs whose authors have not configured CORS for local development. The browser blocks useful API calls before the developer can inspect real upstream behavior, especially when preflight requests fail or response CORS headers are missing, incomplete, duplicated, or incompatible with credentials.
 
-The user wants a local DEV/QA tool that behaves like a Transparent CORS Gateway for configured upstream domains. Browser application code should keep its original request URLs. The user should only manage an explicit configuration file and a one-domain-per-line Domain List, while the gateway handles selective routing, preflight answers, and response CORS repair.
+The user wants a local DEV/QA tool that behaves like a seamless-cors for configured upstream domains. Browser application code should keep its original request URLs. The user should only manage an explicit configuration file and a one-domain-per-line Domain List, while the gateway handles selective routing, preflight answers, and response CORS repair.
 
 ## Solution
 
-Build a Go-based Transparent CORS Gateway distributed as platform-specific binaries so users do not need to install an additional runtime. The gateway runs in the foreground, uses a Minimal Command Surface of `start`, `stop`, and `status`, and creates a commented default configuration plus Domain List on first start.
+Build a Go-based seamless-cors distributed as platform-specific binaries so users do not need to install an additional runtime. The gateway runs in the foreground, uses a Minimal Command Surface of `start`, `stop`, and `status`, and creates a commented default configuration plus Domain List on first start.
 
 On Managed Platforms, the gateway uses Managed System Proxy with PAC Routing so only Domain List matches route through the gateway and unrelated traffic goes `DIRECT`. macOS and Windows are Managed Platforms for v1. Linux is a Manual Platform for v1, where users can still run the gateway and configure their browser or test tool manually.
 
@@ -27,7 +27,7 @@ The gateway does not rewrite request headers, cookies, auth/session behavior, We
 5. As a frontend developer, I want `Origin: null` to be reflected for matched requests, so that local files and sandboxed DEV/QA cases can be tested.
 6. As a frontend developer, I want CORS repair to apply to upstream error statuses, so that I can see real `401`, `403`, `404`, or `500` responses instead of browser CORS errors.
 7. As a frontend developer, I want gateway-generated errors to be JSON and CORS-readable, so that my frontend can inspect why the gateway failed.
-8. As a frontend developer, I want gateway errors to clearly identify the Transparent CORS Gateway as the source, so that I do not confuse gateway failures with upstream API responses.
+8. As a frontend developer, I want gateway errors to clearly identify the seamless-cors as the source, so that I do not confuse gateway failures with upstream API responses.
 9. As a QA engineer, I want Private Network Access preflight support, so that local and LAN API targets can be tested from browsers that enforce PNA.
 10. As a QA engineer, I want Local Targets such as localhost, loopback, private IPs, and plain HTTP origins to be valid Domain List entries, so that local services and staging boxes can be tested.
 11. As a QA engineer, I want one Domain List Entry per line, so that configuration is quick to edit and review.
@@ -73,7 +73,7 @@ The gateway does not rewrite request headers, cookies, auth/session behavior, We
 51. As a user, I want First-Start Bootstrap, so that missing config and Domain List files are created automatically.
 52. As a user, I want Commented Default Config, so that generated settings explain themselves briefly.
 53. As a user, I want first bootstrap to print file paths only, so that the gateway does not unexpectedly open editors.
-54. As a user, I want the Home Config Directory to store config, domains, and runtime state under `.cors-gateway`, so that files are easy to find across platforms.
+54. As a user, I want the Home Config Directory to store config, domains, and runtime state under `.seamless-cors`, so that files are easy to find across platforms.
 55. As a user, I want Path Expansion for path fields, so that `~` and environment variables work in config paths.
 56. As a user, I want invalid `config.yaml` at start to fail with a report, so that misconfiguration is obvious.
 57. As a user, I want invalid `config.yaml` while running to log a Fatal Config Error and stop cleanly, so that partially applied configuration never happens.
@@ -95,7 +95,7 @@ The gateway does not rewrite request headers, cookies, auth/session behavior, We
 
 ## Implementation Decisions
 
-- Build the Transparent CORS Gateway in Go and ship one Gateway Distribution per operating system and CPU architecture. Users should not need to install an additional runtime.
+- Build the seamless-cors in Go and ship one Gateway Distribution per operating system and CPU architecture. Users should not need to install an additional runtime.
 - Provide only Three Commands in v1: `start`, `stop`, and `status`.
 - `start` uses Foreground Start. It does not launch an official daemon or service in v1.
 - Use hyphenated configuration keys and matching CLI flags.
@@ -108,7 +108,7 @@ The gateway does not rewrite request headers, cookies, auth/session behavior, We
   - `pac-listen: 127.0.0.1:8079`
   - `control-listen: 127.0.0.1:8078`
   - `managed-system-proxy: true`
-  - `domain-list: ~/.cors-gateway/domains.txt`
+  - `domain-list: ~/.seamless-cors/domains.txt`
   - `log-level: info`
   - `ca-trusted: false`
 - Listener Address values are host-port strings, not URLs.
@@ -229,4 +229,4 @@ Deep modules to extract and test in isolation:
 - `start` and `stop` may perform Marker-Based Recovery.
 - `ca-trusted: false` is the generated default, so first-run HTTPS Domain List entries may be valid but non-repairable until CA trust is explicitly enabled through config or a One-Run Override.
 - If generated files are missing, First-Start Bootstrap should create them and print the paths. If the Domain List has no active entries, startup should fail with instructions to add entries.
-- The project name in the glossary is CORS VPN, but the canonical product term is Transparent CORS Gateway.
+- The project name in the glossary is seamless-cors, but the canonical product term is seamless-cors.

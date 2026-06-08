@@ -11,9 +11,9 @@ import (
 )
 
 const usage = `Usage:
-  cors-gateway start [flags]
-  cors-gateway stop [flags]
-  cors-gateway status [flags]
+  seamless-cors start [flags]
+  seamless-cors stop [flags]
+  seamless-cors status [flags]
 `
 
 // Run dispatches the v1 Minimal Command Surface.

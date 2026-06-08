@@ -70,7 +70,7 @@ func (s *Server) State() State {
 }
 
 func (s *Server) authorized(req *http.Request) bool {
-	return s.token != "" && req.Header.Get("X-CORS-Gateway-Token") == s.token
+	return s.token != "" && req.Header.Get("X-Seamless-CORS-Token") == s.token
 }
 
 func (s *Server) Serve(listener net.Listener) error {
@@ -115,7 +115,7 @@ func FetchStatus(baseURL, token string) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	req.Header.Set("X-CORS-Gateway-Token", token)
+	req.Header.Set("X-Seamless-CORS-Token", token)
 	client := http.Client{Timeout: 500 * time.Millisecond}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -135,10 +135,10 @@ func FetchStatus(baseURL, token string) (State, error) {
 func CallStatus(baseURL, token string, stdout io.Writer) error {
 	state, err := FetchStatus(baseURL, token)
 	if err != nil {
-		fmt.Fprintln(stdout, "Transparent CORS Gateway status: not running")
+		fmt.Fprintln(stdout, "seamless-cors status: not running")
 		return nil
 	}
-	fmt.Fprintln(stdout, "Transparent CORS Gateway status: running")
+	fmt.Fprintln(stdout, "seamless-cors status: running")
 	fmt.Fprintf(stdout, "runtime-proxy-endpoint: %s\n", state.ProxyListen)
 	fmt.Fprintf(stdout, "runtime-pac-endpoint: %s\n", state.PACListen)
 	fmt.Fprintf(stdout, "runtime-control-endpoint: %s\n", state.ControlListen)
@@ -155,15 +155,15 @@ func CallStop(baseURL, token string, stdout io.Writer) (bool, error) {
 	client := http.Client{Timeout: 500 * time.Millisecond}
 	resp, err := postWithToken(client, baseURL+"/stop", token)
 	if err != nil {
-		fmt.Fprintln(stdout, "Transparent CORS Gateway stop requested; no running gateway found")
+		fmt.Fprintln(stdout, "seamless-cors stop requested; no running seamless-cors found")
 		return false, nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
-		fmt.Fprintln(stdout, "Transparent CORS Gateway stop requested; no running gateway found")
+		fmt.Fprintln(stdout, "seamless-cors stop requested; no running seamless-cors found")
 		return false, nil
 	}
-	fmt.Fprintln(stdout, "Transparent CORS Gateway stop requested")
+	fmt.Fprintln(stdout, "seamless-cors stop requested")
 	return true, nil
 }
 
@@ -172,6 +172,6 @@ func postWithToken(client http.Client, url, token string) (*http.Response, error
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-CORS-Gateway-Token", token)
+	req.Header.Set("X-Seamless-CORS-Token", token)
 	return client.Do(req)
 }

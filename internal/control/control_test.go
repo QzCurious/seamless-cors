@@ -28,7 +28,7 @@ func TestControlEndpointReportsHumanStatusAndAcceptsStop(t *testing.T) {
 	if err := CallStatus(base, "secret-token", &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Transparent CORS Gateway status: running") {
+	if !strings.Contains(out.String(), "seamless-cors status: running") {
 		t.Fatalf("status output = %q", out.String())
 	}
 	if !strings.Contains(out.String(), "runtime-proxy-endpoint: 127.0.0.1:8080") {

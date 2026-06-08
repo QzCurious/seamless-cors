@@ -1,3 +1,3 @@
 package version
 
-const Name = "Transparent CORS Gateway"
+const Name = "seamless-cors"
