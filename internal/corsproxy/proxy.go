@@ -1,4 +1,4 @@
-package proxy
+package corsproxy
 
 import (
 	"bufio"
@@ -9,24 +9,18 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
-	"sync"
 
 	"seamless-cors/internal/ca"
 	"seamless-cors/internal/cors"
-	"seamless-cors/internal/domain"
 )
 
 type Options struct {
-	Entries   []domain.Entry
 	CATrusted bool
 	Authority *ca.EphemeralAuthority
 	Transport http.RoundTripper
 }
 
 type Core struct {
-	entries   []domain.Entry
-	mu        sync.RWMutex
 	caTrusted bool
 	authority *ca.EphemeralAuthority
 	transport http.RoundTripper
@@ -37,17 +31,11 @@ func New(opts Options) *Core {
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	return &Core{entries: opts.Entries, caTrusted: opts.CATrusted, authority: opts.Authority, transport: transport}
+	return &Core{caTrusted: opts.CATrusted, authority: opts.Authority, transport: transport}
 }
 
 func (c *Core) SetAuthority(authority *ca.EphemeralAuthority) {
 	c.authority = authority
-}
-
-func (c *Core) SetEntries(entries []domain.Entry) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.entries = entries
 }
 
 func (c *Core) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -58,10 +46,6 @@ func (c *Core) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	target := absoluteURL(req)
 	if target == nil {
 		cors.WriteGatewayError(w, req, http.StatusBadGateway, "upstream", fmt.Errorf("request target is not an absolute URL"))
-		return
-	}
-	if !c.matches(target) {
-		cors.WriteGatewayError(w, req, http.StatusForbidden, "unmatched", fmt.Errorf("host is not in Domain List"))
 		return
 	}
 	if cors.IsPreflight(req) {
@@ -100,7 +84,7 @@ func (c *Core) forward(w http.ResponseWriter, req *http.Request, target *url.URL
 }
 
 func (c *Core) handleConnect(w http.ResponseWriter, req *http.Request) {
-	if c.caTrusted && c.matchesHostPort("https", req.Host) {
+	if c.caTrusted {
 		c.handleTrustedHTTPS(w, req)
 		return
 	}
@@ -229,38 +213,6 @@ func (w rawResponseWriter) Write(body []byte) (int, error) {
 	return w.conn.Write(body)
 }
 
-func (c *Core) matches(target *url.URL) bool {
-	host := target.Hostname()
-	port := target.Port()
-	if port == "" {
-		port = defaultPort(target.Scheme)
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, entry := range c.entries {
-		if entry.Matches(target.Scheme, host, port) {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *Core) matchesHostPort(scheme, hostPort string) bool {
-	host, port, err := net.SplitHostPort(hostPort)
-	if err != nil {
-		host = hostPort
-		port = defaultPort(scheme)
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, entry := range c.entries {
-		if entry.Matches(scheme, host, port) {
-			return true
-		}
-	}
-	return false
-}
-
 func absoluteURL(req *http.Request) *url.URL {
 	if req.URL == nil {
 		return nil
@@ -279,17 +231,6 @@ func absoluteURL(req *http.Request) *url.URL {
 	copy.Scheme = scheme
 	copy.Host = req.Host
 	return &copy
-}
-
-func defaultPort(scheme string) string {
-	switch strings.ToLower(scheme) {
-	case "http":
-		return "80"
-	case "https":
-		return "443"
-	default:
-		return ""
-	}
 }
 
 func shouldKeepAlive(req *http.Request, resp *http.Response) bool {

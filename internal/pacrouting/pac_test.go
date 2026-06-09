@@ -1,4 +1,4 @@
-package pac
+package pacrouting
 
 import (
 	"reflect"
@@ -30,6 +30,48 @@ func TestGenerateUsesTrustAwareHTTPSRouting(t *testing.T) {
 	}
 	if !strings.Contains(js, "DIRECT") {
 		t.Fatal("PAC should return DIRECT for unmatched traffic")
+	}
+}
+
+func TestPolicyMatchesDomainListEntries(t *testing.T) {
+	entries := mustParseEntries(t,
+		"api.example.test",
+		"API.EXAMPLE.TEST",
+		"*.qa.example.test",
+		"https://localhost:9443",
+		"https://api.example.test",
+		"http://[::1]:3000",
+	)
+	policy := NewPolicy(entries)
+
+	if !policy.Matches("https", "api.example.test", "443") {
+		t.Fatal("hostname shorthand should match any scheme and port")
+	}
+	if !policy.Matches("http", "API.EXAMPLE.TEST", "3333") {
+		t.Fatal("matching should ignore host case")
+	}
+	if !policy.Matches("https", "one.qa.example.test", "443") {
+		t.Fatal("wildcard should match one label")
+	}
+	if policy.Matches("https", "two.one.qa.example.test", "443") {
+		t.Fatal("wildcard should not match two labels")
+	}
+	if !policy.Matches("https", "localhost", "9443") {
+		t.Fatal("full origin should match exact scheme host port")
+	}
+	if policy.Matches("https", "localhost", "443") {
+		t.Fatal("full origin matched the wrong port")
+	}
+	if !policy.Matches("http", "::1", "3000") {
+		t.Fatal("full IPv6 origin should match")
+	}
+
+	originOnly := NewPolicy(mustParseEntries(t, "https://origin-only.example.test"))
+	if !originOnly.Matches("https", "origin-only.example.test", "443") {
+		t.Fatal("https origin should match the default HTTPS port")
+	}
+	if originOnly.Matches("http", "origin-only.example.test", "80") {
+		t.Fatal("https origin matched a different scheme")
 	}
 }
 
@@ -74,7 +116,7 @@ func TestDeriveRouteBucketsAppliesTrustAwarePACRouting(t *testing.T) {
 		"https://secure.example.test",
 	)
 
-	buckets := deriveRouteBuckets(entries, false)
+	buckets := deriveRouteBuckets(NewPolicy(entries), false)
 
 	wantExact := []hostRoute{{Host: "api.example.test", AllowHTTP: true, AllowHTTPS: false}}
 	if !reflect.DeepEqual(buckets.exactHosts, wantExact) {
@@ -93,7 +135,7 @@ func TestDeriveRouteBucketsAppliesTrustAwarePACRouting(t *testing.T) {
 func TestDeriveRouteBucketsIncludesHTTPSWhenCATrusted(t *testing.T) {
 	entries := mustParseEntries(t, "api.example.test", "https://secure.example.test")
 
-	buckets := deriveRouteBuckets(entries, true)
+	buckets := deriveRouteBuckets(NewPolicy(entries), true)
 
 	wantExact := []hostRoute{{Host: "api.example.test", AllowHTTP: true, AllowHTTPS: true}}
 	if !reflect.DeepEqual(buckets.exactHosts, wantExact) {

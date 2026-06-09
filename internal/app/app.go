@@ -22,11 +22,11 @@ import (
 	"seamless-cors/internal/cleanup"
 	"seamless-cors/internal/config"
 	"seamless-cors/internal/control"
+	"seamless-cors/internal/corsproxy"
 	"seamless-cors/internal/domain"
 	"seamless-cors/internal/liveconfig"
-	"seamless-cors/internal/pac"
+	"seamless-cors/internal/pacrouting"
 	"seamless-cors/internal/platform"
-	"seamless-cors/internal/proxy"
 )
 
 var ErrLifecycleConsentDeclined = errors.New("explicit lifecycle consent declined")
@@ -149,9 +149,9 @@ type Runtime struct {
 	adapter          platform.Adapter
 	stdout           io.Writer
 	authority        *ca.EphemeralAuthority
-	proxyCore        *proxy.Core
+	proxyCore        *corsproxy.Core
 	proxy            *http.Server
-	pacHandler       *pac.DynamicHandler
+	pacHandler       *pacrouting.DynamicHandler
 	pac              *http.Server
 	control          *control.Server
 	listeners        []net.Listener
@@ -219,9 +219,9 @@ func NewRuntimeFromLiveConfig(source *liveconfig.Source, snapshot liveconfig.Sna
 	pacListen := pacListener.Addr().String()
 	controlListen := controlListener.Addr().String()
 
-	proxyCore := proxy.New(proxy.Options{Entries: entries, CATrusted: cfg.CATrusted})
-	pacBody := pac.Generate(pac.Options{ProxyListen: proxyListen, CATrusted: cfg.CATrusted, Entries: entries})
-	pacHandler := pac.NewDynamicHandler(pacBody)
+	proxyCore := corsproxy.New(corsproxy.Options{CATrusted: cfg.CATrusted})
+	pacBody := pacrouting.Generate(pacrouting.Options{ProxyListen: proxyListen, CATrusted: cfg.CATrusted, Entries: entries})
+	pacHandler := pacrouting.NewDynamicHandler(pacBody)
 	controlServer := control.New(control.State{
 		ProxyListen:   proxyListen,
 		PACListen:     pacListen,
@@ -411,8 +411,7 @@ func (r *Runtime) applyLiveConfig(snapshot liveconfig.Snapshot) {
 	r.pendingLifecycle = snapshot.PendingLifecycle
 	state := r.controlStateLocked()
 	r.mu.Unlock()
-	r.proxyCore.SetEntries(snapshot.Entries)
-	r.pacHandler.Set(pac.Generate(pac.Options{
+	r.pacHandler.Set(pacrouting.Generate(pacrouting.Options{
 		ProxyListen: r.listeners[0].Addr().String(),
 		CATrusted:   snapshot.CATrusted,
 		Entries:     snapshot.Entries,

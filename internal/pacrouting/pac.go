@@ -1,4 +1,4 @@
-package pac
+package pacrouting
 
 import (
 	"encoding/json"
@@ -10,10 +10,31 @@ import (
 	"seamless-cors/internal/domain"
 )
 
+type Policy struct {
+	entries []domain.Entry
+}
+
 type Options struct {
 	ProxyListen string
 	CATrusted   bool
 	Entries     []domain.Entry
+}
+
+func NewPolicy(entries []domain.Entry) Policy {
+	return Policy{entries: append([]domain.Entry(nil), entries...)}
+}
+
+func (p Policy) Entries() []domain.Entry {
+	return append([]domain.Entry(nil), p.entries...)
+}
+
+func (p Policy) Matches(scheme, host, port string) bool {
+	for _, entry := range p.entries {
+		if entryMatches(entry, scheme, host, port) {
+			return true
+		}
+	}
+	return false
 }
 
 func Handler(body string) http.Handler {
@@ -45,7 +66,7 @@ func (h *DynamicHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 }
 
 func Generate(opts Options) string {
-	buckets := deriveRouteBuckets(opts.Entries, opts.CATrusted)
+	buckets := deriveRouteBuckets(NewPolicy(opts.Entries), opts.CATrusted)
 	return fmt.Sprintf(
 		pacTemplate,
 		pacJSONLiteral("PROXY "+opts.ProxyListen),
@@ -123,13 +144,13 @@ type originRoute struct {
 	Port   string `json:"port"`
 }
 
-func deriveRouteBuckets(entries []domain.Entry, caTrusted bool) routeBuckets {
+func deriveRouteBuckets(policy Policy, caTrusted bool) routeBuckets {
 	buckets := routeBuckets{
 		exactHosts:      []hostRoute{},
 		wildcardParents: []hostRoute{},
 		origins:         []originRoute{},
 	}
-	for _, entry := range entries {
+	for _, entry := range policy.entries {
 		if entry.Scheme != "" {
 			if entry.Scheme == "https" && !caTrusted {
 				continue
@@ -154,6 +175,26 @@ func deriveRouteBuckets(entries []domain.Entry, caTrusted bool) routeBuckets {
 		buckets.exactHosts = append(buckets.exactHosts, route)
 	}
 	return buckets
+}
+
+func entryMatches(entry domain.Entry, scheme, host, port string) bool {
+	if entry.Scheme != "" && !strings.EqualFold(entry.Scheme, scheme) {
+		return false
+	}
+	if entry.Port != "" && entry.Port != port {
+		return false
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	want := strings.ToLower(entry.Host)
+	if !entry.Wildcard {
+		return host == want
+	}
+	suffix := strings.TrimPrefix(want, "*.")
+	if !strings.HasSuffix(host, "."+suffix) {
+		return false
+	}
+	prefix := strings.TrimSuffix(host, "."+suffix)
+	return prefix != "" && !strings.Contains(prefix, ".")
 }
 
 type pacLiteral interface {

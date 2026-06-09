@@ -63,26 +63,6 @@ func ParseEntry(text string) (Entry, error) {
 	return parseHostname(text)
 }
 
-func (e Entry) Matches(scheme, host, port string) bool {
-	if e.Scheme != "" && !strings.EqualFold(e.Scheme, scheme) {
-		return false
-	}
-	if e.Port != "" && e.Port != port {
-		return false
-	}
-	host = strings.TrimSuffix(strings.ToLower(host), ".")
-	want := strings.ToLower(e.Host)
-	if !e.Wildcard {
-		return host == want
-	}
-	suffix := strings.TrimPrefix(want, "*.")
-	if !strings.HasSuffix(host, "."+suffix) {
-		return false
-	}
-	prefix := strings.TrimSuffix(host, "."+suffix)
-	return prefix != "" && !strings.Contains(prefix, ".")
-}
-
 func parseOrigin(text string) (Entry, error) {
 	u, err := url.Parse(text)
 	if err != nil {

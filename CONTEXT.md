@@ -29,7 +29,7 @@ A runtime proxy auto-configuration artifact derived from Explicit Configuration 
 _Avoid_: user-authored PAC, manual PAC rules
 
 **PAC Route Set**:
-The Generated PAC data buckets derived inside the PAC module from normalized Domain List Entries and the current Trusted HTTPS Interception state, keeping the PAC JavaScript mostly static.
+The Generated PAC data buckets derived inside the PAC Routing module from normalized Domain List Entries and the current Trusted HTTPS Interception state, keeping the PAC JavaScript mostly static.
 _Avoid_: hand-built JavaScript rules, duplicated Domain List parsing, PAC-owned Domain List syntax
 
 **PAC Endpoint**:
@@ -45,7 +45,7 @@ A gateway-generated failure response that clearly identifies seamless-cors as th
 _Avoid_: disguised upstream error, silent failure
 
 **CORS-Readable Gateway Error**:
-An Explicit Gateway Error that includes the Reflective DEV/QA Policy headers when the original request is a matched Origin-gated request.
+An Explicit Gateway Error that includes the Reflective DEV/QA Policy headers when the original request reaching the Proxy Listener is Origin-gated.
 _Avoid_: hidden gateway error, browser-masked failure
 
 **JSON Gateway Error**:
@@ -85,8 +85,8 @@ A local development certificate authority generated for a gateway run, trusted o
 _Avoid_: persistent CA, system-wide CA, retained CA key
 
 **Trusted HTTPS Interception**:
-A lifecycle behavior where matched HTTPS traffic is intercepted only when `ca-trusted` is enabled and the Ephemeral User CA is trusted for the current user.
-_Avoid_: untrusted HTTPS interception, broken MITM
+A lifecycle behavior where HTTPS traffic that reaches the Proxy Listener is intercepted only when `ca-trusted` is enabled and the Ephemeral User CA is trusted for the current user.
+_Avoid_: untrusted HTTPS interception, broken MITM, Domain List gated interception
 
 **Opt-In CA Trust**:
 A lifecycle default where generated configuration starts with `ca-trusted: false` so HTTPS interception requires an explicit user choice.
@@ -125,8 +125,16 @@ A separate loopback endpoint used by gateway commands such as stop and status, p
 _Avoid_: proxy-path admin command, public control API
 
 **Proxy Listener**:
-A local proxy endpoint used by PAC Routing to send matched browser traffic through the gateway.
+A local proxy endpoint where traffic that reaches it is eligible for CORS repair, normally reached through PAC Routing for Domain List matches.
 _Avoid_: manual proxy endpoint, browser setup address, generic listen, gatewayListen
+
+**CORS Proxy**:
+The gateway module behind the Proxy Listener that owns CORS repair, Local Preflight Answer, Response Repair, Explicit Gateway Error responses, and Trusted HTTPS Interception behavior for traffic that reaches it.
+_Avoid_: Domain List admission module, PAC Routing module, generic proxy
+
+**Diagnostic Proxy Listener Use**:
+An allowed troubleshooting behavior where a local user may point a browser or tool directly at the Proxy Listener, while normal Start Guidance still presents PAC Routing as the managed setup path.
+_Avoid_: supported manual setup path, listener-first start output, domain-list admission fallback
 
 **Explicit Configuration**:
 The complete user-editable gateway configuration, including live request policy and lifecycle settings but excluding runtime-selected listener addresses.
@@ -253,8 +261,8 @@ An automatically selected listener address shown by status for troubleshooting, 
 _Avoid_: setup address, configured listener, manual proxy instruction
 
 **Domain List**:
-The user-managed newline-delimited set of upstream hostnames or origins where the gateway is allowed to adjust browser-origin behavior during DEV/QA work.
-_Avoid_: routing table, interception rules, proxy rules
+The user-managed newline-delimited set of upstream hostnames or origins used by PAC Routing to decide which browser requests normally reach the Proxy Listener during DEV/QA work.
+_Avoid_: proxy admission list, interception rules, proxy rules
 
 **Domain List Comment**:
 A full-line or inline note in the Domain List that is ignored during matching.
@@ -277,8 +285,8 @@ A single line in the Domain List that may name a full origin or use hostname sho
 _Avoid_: rule, matcher expression
 
 **Domain List Routing Policy**:
-A runtime interpretation of normalized Domain List Entries that decides whether a browser request reaching the gateway is a Domain List match.
-_Avoid_: raw string matching, duplicated proxy matchers, PAC JavaScript generation
+A runtime interpretation owned by the PAC Routing module that decides whether normalized Domain List Entries send a browser request to the Proxy Listener.
+_Avoid_: proxy admission policy, raw string matching, duplicated PAC matchers
 
 **Hostname Shorthand**:
 A Domain List Entry that names a host without scheme so it matches that host across schemes and ports.
@@ -305,15 +313,15 @@ A Domain List Entry for an IPv6 target that must include scheme and bracketed IP
 _Avoid_: IPv6 hostname shorthand
 
 **Reflective DEV/QA Policy**:
-The default cross-origin behavior for Domain List matches, where the gateway reflects the browser request's origin and requested CORS capabilities so credentialed development and testing flows are browser-valid.
+The default cross-origin behavior for traffic that reaches the Proxy Listener, where the gateway reflects the browser request's origin and requested CORS capabilities so credentialed development and testing flows are browser-valid.
 _Avoid_: wildcard CORS, production CORS policy, allow-all policy
 
 **Credentialed Reflection**:
-A Reflective DEV/QA Policy behavior where matched Origin-gated responses always include `Access-Control-Allow-Credentials: true` with a reflected request origin.
+A Reflective DEV/QA Policy behavior where Origin-gated responses reaching the Proxy Listener always include `Access-Control-Allow-Credentials: true` with a reflected request origin.
 _Avoid_: wildcard credentials, credentialless default
 
 **Null Origin Reflection**:
-A Credentialed Reflection behavior where `Origin: null` is reflected for matched DEV/QA requests.
+A Credentialed Reflection behavior where `Origin: null` is reflected for DEV/QA requests reaching the Proxy Listener.
 _Avoid_: null origin rejection
 
 **Origin Vary Preservation**:
@@ -329,7 +337,7 @@ A Local Preflight Answer behavior where preflight responses echo the browser's r
 _Avoid_: broad allow-methods
 
 **Global CORS Policy**:
-A gateway behavior where every Domain List match uses the same Reflective DEV/QA Policy instead of per-domain policy settings.
+A gateway behavior where every request reaching the Proxy Listener uses the same Reflective DEV/QA Policy instead of per-domain policy settings.
 _Avoid_: per-domain CORS policy, domain-specific overrides
 
 **Origin-Gated Rewriting**:
@@ -337,11 +345,11 @@ A gateway behavior where cross-origin response changes are applied only when the
 _Avoid_: blanket rewriting, unconditional CORS headers
 
 **Local Preflight Answer**:
-A gateway behavior where browser CORS preflight requests for Domain List matches are answered by the gateway instead of being forwarded upstream.
+A gateway behavior where browser CORS preflight requests that reach the Proxy Listener are answered by the gateway instead of being forwarded upstream.
 _Avoid_: upstream preflight, preflight repair
 
 **Private Network Access Reflection**:
-A Local Preflight Answer behavior where matched requests that ask for private network access receive `Access-Control-Allow-Private-Network: true`.
+A Local Preflight Answer behavior where requests reaching the Proxy Listener that ask for private network access receive `Access-Control-Allow-Private-Network: true`.
 _Avoid_: PNA omission for local targets
 
 **Fixed Preflight Cache**:
@@ -349,11 +357,11 @@ A Local Preflight Answer behavior that uses a fixed `Access-Control-Max-Age` of 
 _Avoid_: configurable preflight cache, indefinite preflight cache
 
 **Response Repair**:
-A gateway behavior where real upstream responses for Domain List matches are adjusted on the way back to satisfy the Reflective DEV/QA Policy.
+A gateway behavior where real upstream responses for requests that reach the Proxy Listener are adjusted on the way back to satisfy the Reflective DEV/QA Policy.
 _Avoid_: request rewrite, upstream configuration
 
 **All-Status Repair**:
-A Response Repair behavior where matched Origin-gated upstream responses receive CORS repair regardless of upstream status code.
+A Response Repair behavior where Origin-gated upstream responses reaching the Proxy Listener receive CORS repair regardless of upstream status code.
 _Avoid_: success-only repair, hidden API error
 
 **No Request Header Rewriting**:
@@ -424,7 +432,7 @@ QA engineer: "Explicit Gateway Error makes clear the failure came from the gatew
 
 Developer: "Will frontend code be able to read gateway errors?"
 
-QA engineer: "CORS-Readable Gateway Error makes matched Origin-gated gateway failures visible to the browser client."
+QA engineer: "CORS-Readable Gateway Error makes Origin-gated gateway failures visible to the browser client when they reach the Proxy Listener."
 
 Developer: "What format do gateway errors use?"
 
@@ -444,7 +452,7 @@ QA engineer: "No, OS Trust Only keeps certificate trust limited to the current u
 
 Developer: "What happens when `ca-trusted` is false?"
 
-QA engineer: "Trusted HTTPS Interception is disabled, so matched HTTPS traffic is not intercepted."
+QA engineer: "Trusted HTTPS Interception is disabled, so HTTPS traffic that reaches the Proxy Listener is tunneled without CORS repair."
 
 Developer: "Will the first run automatically trust a CA?"
 
@@ -630,7 +638,7 @@ Developer: "Can credentialed browser requests work without configuring allowed o
 
 QA engineer: "Yes, the Reflective DEV/QA Policy reflects the request origin instead of using a wildcard."
 
-Developer: "Are credentials allowed for matched CORS responses?"
+Developer: "Are credentials allowed for CORS-repaired responses?"
 
 QA engineer: "Yes, Credentialed Reflection always allows credentials with the reflected origin."
 
@@ -652,7 +660,7 @@ QA engineer: "Requested Method Reflection echoes the browser's requested method.
 
 Developer: "Can each domain have a different CORS policy?"
 
-QA engineer: "No, Global CORS Policy applies the same DEV/QA behavior to every Domain List match."
+QA engineer: "No, Global CORS Policy applies the same DEV/QA behavior to every request reaching the Proxy Listener."
 
 Developer: "Will same-origin or non-browser traffic get CORS headers added?"
 
@@ -664,7 +672,7 @@ QA engineer: "No, Local Preflight Answer handles browser preflight and Response 
 
 Developer: "Are Private Network Access preflights handled?"
 
-QA engineer: "Yes, Private Network Access Reflection allows matched PNA preflights."
+QA engineer: "Yes, Private Network Access Reflection allows PNA preflights that reach the Proxy Listener."
 
 Developer: "Will `401` or `500` upstream responses still be readable by frontend code?"
 

@@ -1,4 +1,4 @@
-package proxy
+package corsproxy
 
 import (
 	"bufio"
@@ -8,16 +8,16 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"seamless-cors/internal/ca"
-	"seamless-cors/internal/domain"
 	"seamless-cors/internal/platform"
 )
 
-func TestHTTPProxyForwardsMatchedRequestsAndRepairsAllStatuses(t *testing.T) {
+func TestHTTPProxyForwardsRequestsAndRepairsAllStatuses(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if got := req.Header.Get("Origin"); got != "https://app.local" {
 			t.Fatalf("Origin was rewritten: %q", got)
@@ -29,11 +29,7 @@ func TestHTTPProxyForwardsMatchedRequestsAndRepairsAllStatuses(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	entry, err := domain.ParseEntry(upstream.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	core := New(Options{Entries: []domain.Entry{entry}})
+	core := New(Options{})
 	req := httptest.NewRequest(http.MethodGet, upstream.URL+"/v1/items?q=dev", nil)
 	req.Header.Set("Origin", "https://app.local")
 	rec := httptest.NewRecorder()
@@ -57,12 +53,8 @@ func TestHTTPProxyForwardsMatchedRequestsAndRepairsAllStatuses(t *testing.T) {
 	}
 }
 
-func TestProxyAnswersMatchedPreflightLocally(t *testing.T) {
-	entry, err := domain.ParseEntry("api.example.test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	core := New(Options{Entries: []domain.Entry{entry}})
+func TestProxyAnswersPreflightLocally(t *testing.T) {
+	core := New(Options{})
 	req := httptest.NewRequest(http.MethodOptions, "http://api.example.test/v1/items", nil)
 	req.Header.Set("Origin", "null")
 	req.Header.Set("Access-Control-Request-Method", "PATCH")
@@ -90,9 +82,12 @@ func TestProxyAnswersMatchedPreflightLocally(t *testing.T) {
 }
 
 func TestProxyGatewayErrorsAreJSONAndCORSReadable(t *testing.T) {
-	entry, _ := domain.ParseEntry("api.example.test")
-	core := New(Options{Entries: []domain.Entry{entry}})
-	req := httptest.NewRequest(http.MethodGet, "http://other.example.test/v1", nil)
+	core := New(Options{})
+	req := &http.Request{
+		Method: http.MethodGet,
+		URL:    &url.URL{Path: "/v1"},
+		Header: http.Header{},
+	}
 	req.Header.Set("Origin", "https://app.local")
 	rec := httptest.NewRecorder()
 
@@ -111,6 +106,30 @@ func TestProxyGatewayErrorsAreJSONAndCORSReadable(t *testing.T) {
 	}
 }
 
+func TestHTTPProxyRepairsAnyTrafficThatReachesIt(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		_, _ = w.Write([]byte("direct proxy body"))
+	}))
+	defer upstream.Close()
+
+	core := New(Options{})
+	req := httptest.NewRequest(http.MethodGet, upstream.URL+"/manual", nil)
+	req.Header.Set("Origin", "https://manual.local")
+	rec := httptest.NewRecorder()
+
+	core.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://manual.local" {
+		t.Fatalf("allow origin = %q", got)
+	}
+}
+
 func TestTrustedHTTPSInterceptionRepairsResponsesInsideConnectTunnel(t *testing.T) {
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if got := req.Header.Get("Origin"); got != "https://app.local" {
@@ -126,12 +145,7 @@ func TestTrustedHTTPSInterceptionRepairsResponsesInsideConnectTunnel(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry, err := domain.ParseEntry(upstream.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
 	core := New(Options{
-		Entries:   []domain.Entry{entry},
 		CATrusted: true,
 		Authority: authority,
 		Transport: upstream.Client().Transport,
@@ -209,12 +223,7 @@ func TestTrustedHTTPSInterceptionAnswersPreflightLocally(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry, err := domain.ParseEntry(upstream.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
 	core := New(Options{
-		Entries:   []domain.Entry{entry},
 		CATrusted: true,
 		Authority: authority,
 		Transport: upstream.Client().Transport,

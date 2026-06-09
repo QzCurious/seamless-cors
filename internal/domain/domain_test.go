@@ -2,7 +2,7 @@ package domain
 
 import "testing"
 
-func TestParseListSupportsCommentsAndMatching(t *testing.T) {
+func TestParseListSupportsCommentsAndNormalization(t *testing.T) {
 	entries, errs := ParseList(`
 # staging
 api.example.test # exact
@@ -16,39 +16,27 @@ https://localhost:9443
 	if len(entries) != 4 {
 		t.Fatalf("entries = %d", len(entries))
 	}
-	if !entries[0].Matches("https", "api.example.test", "443") {
-		t.Fatal("hostname shorthand should match any scheme and port")
+	if entries[0].Host != "api.example.test" || entries[0].Scheme != "" || entries[0].Port != "" {
+		t.Fatalf("hostname shorthand entry = %#v", entries[0])
 	}
 	if entries[1].Host != "api.example.test" {
 		t.Fatalf("uppercase hostname should be normalized, got %q", entries[1].Host)
 	}
-	if !entries[1].Matches("http", "API.EXAMPLE.TEST", "3333") {
-		t.Fatal("matching should ignore host case")
+	if !entries[2].Wildcard || entries[2].Host != "*.qa.example.test" {
+		t.Fatalf("wildcard entry = %#v", entries[2])
 	}
-	if !entries[2].Matches("https", "one.qa.example.test", "443") {
-		t.Fatal("wildcard should match one label")
-	}
-	if entries[2].Matches("https", "two.one.qa.example.test", "443") {
-		t.Fatal("wildcard should not match two labels")
-	}
-	if !entries[3].Matches("https", "localhost", "9443") {
-		t.Fatal("full origin should match exact scheme host port")
+	if entries[3].Scheme != "https" || entries[3].Host != "localhost" || entries[3].Port != "9443" {
+		t.Fatalf("full origin entry = %#v", entries[3])
 	}
 }
 
-func TestFullOriginWithoutExplicitPortMatchesOnlyDefaultPort(t *testing.T) {
+func TestFullOriginWithoutExplicitPortUsesDefaultPort(t *testing.T) {
 	entry, err := ParseEntry("https://api.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !entry.Matches("https", "api.example.test", "443") {
-		t.Fatal("https origin should match the default HTTPS port")
-	}
-	if entry.Matches("https", "api.example.test", "8443") {
-		t.Fatal("https origin without explicit port matched a non-default port")
-	}
-	if entry.Matches("http", "api.example.test", "80") {
-		t.Fatal("https origin matched a different scheme")
+	if entry.Scheme != "https" || entry.Host != "api.example.test" || entry.Port != "443" {
+		t.Fatalf("https origin entry = %#v", entry)
 	}
 }
 
@@ -58,8 +46,8 @@ func TestIPv6RequiresFullOrigin(t *testing.T) {
 	}
 	if entry, err := ParseEntry("http://[::1]:3000"); err != nil {
 		t.Fatalf("full IPv6 origin failed: %v", err)
-	} else if !entry.Matches("http", "::1", "3000") {
-		t.Fatal("full IPv6 origin did not match")
+	} else if entry.Scheme != "http" || entry.Host != "::1" || entry.Port != "3000" {
+		t.Fatalf("full IPv6 origin entry = %#v", entry)
 	}
 }
 
