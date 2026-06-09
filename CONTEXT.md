@@ -28,6 +28,10 @@ _Avoid_: routing unrepaired HTTPS, unnecessary HTTPS proxying
 A runtime proxy auto-configuration artifact derived from Explicit Configuration and the Domain List, not edited directly by the user.
 _Avoid_: user-authored PAC, manual PAC rules
 
+**PAC Route Set**:
+The Generated PAC data buckets derived inside the PAC module from normalized Domain List Entries and the current Trusted HTTPS Interception state, keeping the PAC JavaScript mostly static.
+_Avoid_: hand-built JavaScript rules, duplicated Domain List parsing, PAC-owned Domain List syntax
+
 **PAC Endpoint**:
 A local HTTP endpoint served by the gateway that returns the current Generated PAC.
 _Avoid_: file PAC, static PAC file
@@ -271,6 +275,10 @@ _Avoid_: stale valid routing, partial valid routing, silent invalid entry
 **Domain List Entry**:
 A single line in the Domain List that may name a full origin or use hostname shorthand for easy DEV/QA configuration.
 _Avoid_: rule, matcher expression
+
+**Domain List Routing Policy**:
+A runtime interpretation of normalized Domain List Entries that decides whether a browser request reaching the gateway is a Domain List match.
+_Avoid_: raw string matching, duplicated proxy matchers, PAC JavaScript generation
 
 **Hostname Shorthand**:
 A Domain List Entry that names a host without scheme so it matches that host across schemes and ports.
