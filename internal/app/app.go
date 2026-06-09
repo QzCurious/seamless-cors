@@ -546,7 +546,7 @@ func RuntimeCleanup(stdout io.Writer, adapter platform.Adapter) error {
 	if err := adapter.CleanupCAFootprint(); err != nil {
 		errs = append(errs, fmt.Errorf("CA trust cleanup failed: %w", err))
 	}
-	for _, name := range []string{"ephemeral-ca.pem", "ephemeral-ca-key.pem", "ca-marker.json", "control-state.json"} {
+	for _, name := range []string{"ephemeral-ca.pem", "ephemeral-ca-key.pem", "control-state.json"} {
 		err := os.Remove(filepath.Join(runtimeDir, name))
 		if err != nil && !os.IsNotExist(err) {
 			errs = append(errs, fmt.Errorf("runtime file cleanup failed for %s: %w", name, err))
@@ -606,7 +606,7 @@ func runtimeFilesNeedCleanup() bool {
 	if err != nil {
 		return false
 	}
-	for _, name := range []string{"ephemeral-ca.pem", "ephemeral-ca-key.pem", "ca-marker.json", "control-state.json"} {
+	for _, name := range []string{"ephemeral-ca.pem", "ephemeral-ca-key.pem", "control-state.json"} {
 		if _, err := os.Stat(filepath.Join(runtimeDir, name)); err == nil {
 			return true
 		}

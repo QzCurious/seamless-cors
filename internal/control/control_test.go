@@ -10,8 +10,8 @@ import (
 
 func TestControlEndpointReportsHumanStatusAndAcceptsStop(t *testing.T) {
 	server := New(State{
-		ProxyListen:   "127.0.0.1:8080",
-		PACListen:     "127.0.0.1:8079",
+		ProxyListen:   "127.0.0.1:49152",
+		PACListen:     "127.0.0.1:49153",
 		ControlListen: "127.0.0.1:0",
 		DomainList:    "/Users/example/.seamless-cors/domains.txt",
 		LogLevel:      "debug",
@@ -33,12 +33,10 @@ func TestControlEndpointReportsHumanStatusAndAcceptsStop(t *testing.T) {
 	if !strings.Contains(out.String(), "seamless-cors status: running") {
 		t.Fatalf("status output = %q", out.String())
 	}
-	if !strings.Contains(out.String(), "runtime-proxy-endpoint: 127.0.0.1:8080") {
-		t.Fatalf("status output = %q", out.String())
-	}
 	for _, want := range []string{
 		"domain-list: /Users/example/.seamless-cors/domains.txt",
 		"log-level: debug",
+		"domains: 2",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("status output missing %q: %q", want, out.String())

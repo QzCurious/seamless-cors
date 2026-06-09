@@ -97,13 +97,3 @@ func (a *EphemeralAuthority) LeafCertificate(host string) (tls.Certificate, erro
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(leafKey)})
 	return tls.X509KeyPair(certPEM, keyPEM)
 }
-
-func Remove(authority *EphemeralAuthority, adapter platform.Adapter) error {
-	if authority == nil {
-		return nil
-	}
-	_ = adapter.CleanupCAFootprint()
-	_ = os.Remove(authority.CertPath)
-	_ = os.Remove(authority.KeyPath)
-	return nil
-}

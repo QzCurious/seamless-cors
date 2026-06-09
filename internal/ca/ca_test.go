@@ -27,7 +27,7 @@ func (f *fakeTrustStore) CleanupCAFootprint() error {
 	return nil
 }
 
-func TestEphemeralAuthorityCreatesTrustsAndFullyRemovesCA(t *testing.T) {
+func TestEphemeralAuthorityCreatesAndTrustsCA(t *testing.T) {
 	dir := t.TempDir()
 	fake := &fakeTrustStore{}
 
@@ -41,18 +41,6 @@ func TestEphemeralAuthorityCreatesTrustsAndFullyRemovesCA(t *testing.T) {
 	for _, path := range []string{authority.CertPath, authority.KeyPath} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected %s to exist: %v", path, err)
-		}
-	}
-
-	if err := Remove(authority, fake); err != nil {
-		t.Fatal(err)
-	}
-	if fake.removed != 1 {
-		t.Fatalf("remove calls = %d", fake.removed)
-	}
-	for _, path := range []string{authority.CertPath, authority.KeyPath} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("expected %s to be removed, stat err=%v", path, err)
 		}
 	}
 }
