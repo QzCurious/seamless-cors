@@ -2,6 +2,7 @@ package pac
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -45,65 +46,64 @@ func (h *DynamicHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 
 func Generate(opts Options) string {
 	buckets := deriveRouteBuckets(opts.Entries, opts.CATrusted)
-	var b strings.Builder
-	b.WriteString("var proxy = ")
-	writeJSON(&b, "PROXY "+opts.ProxyListen)
-	b.WriteString(";\n")
-	b.WriteString("var exactHosts = ")
-	writeJSON(&b, buckets.exactHosts)
-	b.WriteString(";\n")
-	b.WriteString("var wildcardParents = ")
-	writeJSON(&b, buckets.wildcardParents)
-	b.WriteString(";\n")
-	b.WriteString("var origins = ")
-	writeJSON(&b, buckets.origins)
-	b.WriteString(";\n")
-	b.WriteString("\n")
-	b.WriteString("function FindProxyForURL(url, host) {\n")
-	b.WriteString("  host = host.toLowerCase();\n")
-	b.WriteString("  var scheme = url.substring(0, url.indexOf(':')).toLowerCase();\n")
-	b.WriteString("  var urlPort = portForURL(url, scheme);\n")
-	b.WriteString("  if (matchesOrigin(scheme, host, urlPort)) return proxy;\n")
-	b.WriteString("  if (matchesHostRoute(exactHosts, scheme, host)) return proxy;\n")
-	b.WriteString("  if (matchesWildcardRoute(wildcardParents, scheme, host)) return proxy;\n")
-	b.WriteString("  return 'DIRECT';\n")
-	b.WriteString("}\n")
-	b.WriteString("\n")
-	b.WriteString("function portForURL(url, scheme) {\n")
-	b.WriteString("  var parsedPort = url.match(/^[a-zA-Z]+:\\/\\/\\[[^\\]]+\\]:(\\d+)/) || url.match(/^[a-zA-Z]+:\\/\\/[^\\/:]+:(\\d+)/);\n")
-	b.WriteString("  return parsedPort ? parsedPort[1] : (scheme == 'https' ? '443' : '80');\n")
-	b.WriteString("}\n")
-	b.WriteString("\n")
-	b.WriteString("function routeAllows(route, scheme) {\n")
-	b.WriteString("  return (scheme == 'http' && route.http) || (scheme == 'https' && route.https);\n")
-	b.WriteString("}\n")
-	b.WriteString("\n")
-	b.WriteString("function matchesHostRoute(routes, scheme, host) {\n")
-	b.WriteString("  for (var i = 0; i < routes.length; i++) {\n")
-	b.WriteString("    if (host == routes[i].host && routeAllows(routes[i], scheme)) return true;\n")
-	b.WriteString("  }\n")
-	b.WriteString("  return false;\n")
-	b.WriteString("}\n")
-	b.WriteString("\n")
-	b.WriteString("function matchesWildcardRoute(routes, scheme, host) {\n")
-	b.WriteString("  for (var i = 0; i < routes.length; i++) {\n")
-	b.WriteString("    var suffix = '.' + routes[i].host;\n")
-	b.WriteString("    if (!routeAllows(routes[i], scheme) || !dnsDomainIs(host, suffix)) continue;\n")
-	b.WriteString("    var prefix = host.substring(0, host.length - suffix.length);\n")
-	b.WriteString("    if (prefix != '' && prefix.indexOf('.') == -1) return true;\n")
-	b.WriteString("  }\n")
-	b.WriteString("  return false;\n")
-	b.WriteString("}\n")
-	b.WriteString("\n")
-	b.WriteString("function matchesOrigin(scheme, host, port) {\n")
-	b.WriteString("  for (var i = 0; i < origins.length; i++) {\n")
-	b.WriteString("    var route = origins[i];\n")
-	b.WriteString("    if (scheme == route.scheme && host == route.host && port == route.port) return true;\n")
-	b.WriteString("  }\n")
-	b.WriteString("  return false;\n")
-	b.WriteString("}\n")
-	return b.String()
+	return fmt.Sprintf(
+		pacTemplate,
+		pacJSONLiteral("PROXY "+opts.ProxyListen),
+		pacJSONLiteral(buckets.exactHosts),
+		pacJSONLiteral(buckets.wildcardParents),
+		pacJSONLiteral(buckets.origins),
+	)
 }
+
+const pacTemplate = `var proxy = %s;
+var exactHosts = %s;
+var wildcardParents = %s;
+var origins = %s;
+
+function FindProxyForURL(url, host) {
+  host = host.toLowerCase();
+  var scheme = url.substring(0, url.indexOf(':')).toLowerCase();
+  var urlPort = portForURL(url, scheme);
+  if (matchesOrigin(scheme, host, urlPort)) return proxy;
+  if (matchesHostRoute(exactHosts, scheme, host)) return proxy;
+  if (matchesWildcardRoute(wildcardParents, scheme, host)) return proxy;
+  return 'DIRECT';
+}
+
+function portForURL(url, scheme) {
+  var parsedPort = url.match(/^[a-zA-Z]+:\/\/\[[^\]]+\]:(\d+)/) || url.match(/^[a-zA-Z]+:\/\/[^\/:]+:(\d+)/);
+  return parsedPort ? parsedPort[1] : (scheme == 'https' ? '443' : '80');
+}
+
+function routeAllows(route, scheme) {
+  return (scheme == 'http' && route.http) || (scheme == 'https' && route.https);
+}
+
+function matchesHostRoute(routes, scheme, host) {
+  for (var i = 0; i < routes.length; i++) {
+    if (host == routes[i].host && routeAllows(routes[i], scheme)) return true;
+  }
+  return false;
+}
+
+function matchesWildcardRoute(routes, scheme, host) {
+  for (var i = 0; i < routes.length; i++) {
+    var suffix = '.' + routes[i].host;
+    if (!routeAllows(routes[i], scheme) || !dnsDomainIs(host, suffix)) continue;
+    var prefix = host.substring(0, host.length - suffix.length);
+    if (prefix != '' && prefix.indexOf('.') == -1) return true;
+  }
+  return false;
+}
+
+function matchesOrigin(scheme, host, port) {
+  for (var i = 0; i < origins.length; i++) {
+    var route = origins[i];
+    if (scheme == route.scheme && host == route.host && port == route.port) return true;
+  }
+  return false;
+}
+`
 
 type routeBuckets struct {
 	exactHosts      []hostRoute
@@ -156,10 +156,14 @@ func deriveRouteBuckets(entries []domain.Entry, caTrusted bool) routeBuckets {
 	return buckets
 }
 
-func writeJSON(b *strings.Builder, value any) {
+type pacLiteral interface {
+	string | []hostRoute | []originRoute
+}
+
+func pacJSONLiteral[T pacLiteral](value T) string {
 	data, err := json.Marshal(value)
 	if err != nil {
 		panic(err)
 	}
-	b.Write(data)
+	return string(data)
 }
