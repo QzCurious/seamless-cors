@@ -26,7 +26,7 @@ func TestLoadIgnoresUnknownConfigKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded, err := LoadExisting(configPath, Overrides{})
+	loaded, err := LoadExisting(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,23 +35,20 @@ func TestLoadIgnoresUnknownConfigKeys(t *testing.T) {
 	}
 }
 
-func TestLoadOrBootstrapCreatesCommentedDefaultsAndAppliesOverrides(t *testing.T) {
+func TestLoadOrBootstrapCreatesCommentedDefaults(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out bytes.Buffer
 
-	loaded, err := LoadOrBootstrap("", Overrides{
-		CATrusted:    true,
-		CATrustedSet: true,
-	}, &out)
+	loaded, err := LoadOrBootstrap("", &out)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !loaded.Bootstrapped {
 		t.Fatal("expected first-start bootstrap")
 	}
-	if !loaded.Config.CATrusted {
-		t.Fatal("ca-trusted override was not applied")
+	if loaded.Config.CATrusted {
+		t.Fatal("ca-trusted default should require config edit")
 	}
 	if loaded.DomainPath != filepath.Join(home, ".seamless-cors", "domains.txt") {
 		t.Fatalf("domain path = %q", loaded.DomainPath)

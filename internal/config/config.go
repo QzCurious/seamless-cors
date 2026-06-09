@@ -20,17 +20,10 @@ const DefaultConfigFileName = "config.yaml"
 const DefaultDomainListFileName = "domains.txt"
 
 type LoadResult struct {
-	Config        Config
-	ConfigPath    string
-	DomainPath    string
-	Bootstrapped  bool
-	OverrideNames []string
-}
-
-type Overrides struct {
-	DomainList   string
-	CATrusted    bool
-	CATrustedSet bool
+	Config       Config
+	ConfigPath   string
+	DomainPath   string
+	Bootstrapped bool
 }
 
 func Default() Config {
@@ -64,7 +57,7 @@ func RuntimeDir() (string, error) {
 	return filepath.Join(home, "runtime"), nil
 }
 
-func LoadOrBootstrap(configPath string, overrides Overrides, stdout io.Writer) (LoadResult, error) {
+func LoadOrBootstrap(configPath string, stdout io.Writer) (LoadResult, error) {
 	if configPath == "" {
 		var err error
 		configPath, err = DefaultConfigPath()
@@ -96,7 +89,6 @@ func LoadOrBootstrap(configPath string, overrides Overrides, stdout io.Writer) (
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return LoadResult{}, fmt.Errorf("invalid config.yaml: %w", err)
 	}
-	cfg = ApplyOverrides(cfg, overrides)
 	cfg.DomainList, err = ExpandPath(cfg.DomainList)
 	if err != nil {
 		return LoadResult{}, err
@@ -106,15 +98,14 @@ func LoadOrBootstrap(configPath string, overrides Overrides, stdout io.Writer) (
 	}
 	cfg.SourcePath = configPath
 	return LoadResult{
-		Config:        cfg,
-		ConfigPath:    configPath,
-		DomainPath:    cfg.DomainList,
-		Bootstrapped:  bootstrapped,
-		OverrideNames: overrides.Names(),
+		Config:       cfg,
+		ConfigPath:   configPath,
+		DomainPath:   cfg.DomainList,
+		Bootstrapped: bootstrapped,
 	}, nil
 }
 
-func LoadExisting(configPath string, overrides Overrides) (LoadResult, error) {
+func LoadExisting(configPath string) (LoadResult, error) {
 	if configPath == "" {
 		var err error
 		configPath, err = DefaultConfigPath()
@@ -130,7 +121,6 @@ func LoadExisting(configPath string, overrides Overrides) (LoadResult, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return LoadResult{}, fmt.Errorf("invalid config.yaml: %w", err)
 	}
-	cfg = ApplyOverrides(cfg, overrides)
 	cfg.DomainList, err = ExpandPath(cfg.DomainList)
 	if err != nil {
 		return LoadResult{}, err
@@ -140,32 +130,10 @@ func LoadExisting(configPath string, overrides Overrides) (LoadResult, error) {
 	}
 	cfg.SourcePath = configPath
 	return LoadResult{
-		Config:        cfg,
-		ConfigPath:    configPath,
-		DomainPath:    cfg.DomainList,
-		OverrideNames: overrides.Names(),
+		Config:     cfg,
+		ConfigPath: configPath,
+		DomainPath: cfg.DomainList,
 	}, nil
-}
-
-func ApplyOverrides(cfg Config, overrides Overrides) Config {
-	if overrides.DomainList != "" {
-		cfg.DomainList = overrides.DomainList
-	}
-	if overrides.CATrustedSet {
-		cfg.CATrusted = overrides.CATrusted
-	}
-	return cfg
-}
-
-func (o Overrides) Names() []string {
-	var names []string
-	if o.DomainList != "" {
-		names = append(names, "domain-list")
-	}
-	if o.CATrustedSet {
-		names = append(names, "ca-trusted")
-	}
-	return names
 }
 
 func Validate(cfg Config) error {

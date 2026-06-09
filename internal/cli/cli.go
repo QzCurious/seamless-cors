@@ -4,14 +4,11 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/spf13/pflag"
-
 	"seamless-cors/internal/app"
-	"seamless-cors/internal/config"
 )
 
 const usage = `Usage:
-  seamless-cors start [flags]
+  seamless-cors start
   seamless-cors stop [flags]
   seamless-cors status [flags]
 `
@@ -26,7 +23,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 }
 
 type commandHandlers struct {
-	start  func(io.Writer, io.Writer, config.Overrides) error
+	start  func(io.Writer, io.Writer) error
 	stop   func(io.Writer, io.Writer) error
 	status func(io.Writer, io.Writer) error
 }
@@ -39,12 +36,12 @@ func run(args []string, stdout, stderr io.Writer, commands commandHandlers) erro
 
 	switch args[0] {
 	case "start":
-		overrides, err := parseOverrides(args[1:])
-		if err != nil {
+		if len(args[1:]) > 0 {
+			err := fmt.Errorf("start does not accept configuration flags; edit config.yaml instead")
 			fmt.Fprintln(stderr, err)
 			return err
 		}
-		return reportCommandError(stderr, commands.start(stdout, stderr, overrides))
+		return reportCommandError(stderr, commands.start(stdout, stderr))
 	case "stop":
 		return reportCommandError(stderr, commands.stop(stdout, stderr))
 	case "status":
@@ -62,20 +59,4 @@ func reportCommandError(stderr io.Writer, err error) error {
 		fmt.Fprintln(stderr, err)
 	}
 	return err
-}
-
-func parseOverrides(args []string) (config.Overrides, error) {
-	flags := pflag.NewFlagSet("start", pflag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-
-	var overrides config.Overrides
-	flags.BoolVar(&overrides.CATrusted, "ca-trusted", false, "trust ephemeral development CA for this run")
-	flags.StringVar(&overrides.DomainList, "domain-list", "", "domain list path")
-
-	if err := flags.Parse(args); err != nil {
-		return config.Overrides{}, err
-	}
-
-	overrides.CATrustedSet = flags.Changed("ca-trusted")
-	return overrides, nil
 }

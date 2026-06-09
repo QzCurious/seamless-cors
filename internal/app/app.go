@@ -23,6 +23,7 @@ import (
 	"seamless-cors/internal/config"
 	"seamless-cors/internal/control"
 	"seamless-cors/internal/domain"
+	"seamless-cors/internal/liveconfig"
 	"seamless-cors/internal/pac"
 	"seamless-cors/internal/platform"
 	"seamless-cors/internal/proxy"
@@ -30,17 +31,17 @@ import (
 
 var ErrLifecycleConsentDeclined = errors.New("explicit lifecycle consent declined")
 
-func Start(stdout, _ io.Writer, overrides config.Overrides) error {
+func Start(stdout, _ io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return StartWithContextAndInput(ctx, os.Stdin, stdout, overrides, platform.CurrentAdapter)
+	return StartWithContextAndInput(ctx, os.Stdin, stdout, platform.CurrentAdapter)
 }
 
-func StartWithContext(ctx context.Context, stdout io.Writer, overrides config.Overrides, adapter platform.Adapter) error {
-	return StartWithContextAndInput(ctx, nil, stdout, overrides, adapter)
+func StartWithContext(ctx context.Context, stdout io.Writer, adapter platform.Adapter) error {
+	return StartWithContextAndInput(ctx, nil, stdout, adapter)
 }
 
-func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Writer, overrides config.Overrides, adapter platform.Adapter) error {
+func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Writer, adapter platform.Adapter) error {
 	if active, err := activeRuntimeState(); err != nil {
 		return err
 	} else if active {
@@ -50,16 +51,9 @@ func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Wr
 	if err := cleanRuntime(adapter); err != nil {
 		return err
 	}
-	loaded, err := config.LoadOrBootstrap("", overrides, stdout)
+	source, snapshot, err := liveconfig.LoadOrBootstrap("", stdout)
 	if err != nil {
 		return err
-	}
-	entries, errs, err := loadDomainList(loaded.DomainPath)
-	if err != nil {
-		return err
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("invalid Domain List:\n%s", formatDomainErrors(errs))
 	}
 	pacStates, err := adapter.CurrentPACState()
 	if err != nil {
@@ -67,30 +61,26 @@ func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Wr
 	}
 	consent := lifecycleConsentRequest{
 		ManagedPAC:      platform.HasForeignEnabledPACState(pacStates),
-		CATrust:         loaded.Config.CATrusted,
+		CATrust:         snapshot.CATrusted,
 		CurrentPACState: pacStates,
 	}
 	if err := promptForLifecycleConsent(stdin, stdout, consent); err != nil {
 		return err
 	}
 
-	runtime, err := NewRuntime(loaded.Config, entries, adapter, stdout)
+	runtime, err := NewRuntimeFromLiveConfig(source, snapshot, adapter, stdout)
 	if err != nil {
 		return err
 	}
-	runtime.overrides = overrides
-	writeStartGuidance(stdout, loaded)
+	writeStartGuidance(stdout, snapshot)
 	return runtime.Serve(ctx)
 }
 
-func writeStartGuidance(stdout io.Writer, loaded config.LoadResult) {
+func writeStartGuidance(stdout io.Writer, snapshot liveconfig.Snapshot) {
 	fmt.Fprintf(stdout, "seamless-cors running\n")
-	fmt.Fprintf(stdout, "config: %s\n", loaded.ConfigPath)
-	fmt.Fprintf(stdout, "domain-list: %s\n", loaded.DomainPath)
+	fmt.Fprintf(stdout, "config: %s\n", snapshot.ConfigPath)
+	fmt.Fprintf(stdout, "domain-list: %s\n", snapshot.DomainListPath)
 	fmt.Fprintln(stdout, "managed-pac: active")
-	if len(loaded.OverrideNames) > 0 {
-		fmt.Fprintf(stdout, "one-run overrides: %s\n", strings.Join(loaded.OverrideNames, ", "))
-	}
 }
 
 type lifecycleConsentRequest struct {
@@ -168,11 +158,30 @@ type Runtime struct {
 	token            string
 	runtimeDir       string
 	statePath        string
-	overrides        config.Overrides
+	liveConfig       *liveconfig.Source
 	pendingLifecycle []string
 }
 
 func NewRuntime(cfg config.Config, entries []domain.Entry, adapter platform.Adapter, stdout io.Writer) (*Runtime, error) {
+	return NewRuntimeFromLiveConfig(liveconfig.NewSource(liveconfig.Snapshot{
+		Config:           cfg,
+		ConfigPath:       cfg.SourcePath,
+		DomainListPath:   cfg.DomainList,
+		Entries:          entries,
+		CATrusted:        cfg.CATrusted,
+		PendingLifecycle: nil,
+	}), liveconfig.Snapshot{
+		Config:         cfg,
+		ConfigPath:     cfg.SourcePath,
+		DomainListPath: cfg.DomainList,
+		Entries:        entries,
+		CATrusted:      cfg.CATrusted,
+	}, adapter, stdout)
+}
+
+func NewRuntimeFromLiveConfig(source *liveconfig.Source, snapshot liveconfig.Snapshot, adapter platform.Adapter, stdout io.Writer) (*Runtime, error) {
+	cfg := activeConfig(snapshot)
+	entries := snapshot.Entries
 	if err := config.Validate(cfg); err != nil {
 		return nil, err
 	}
@@ -226,6 +235,7 @@ func NewRuntime(cfg config.Config, entries []domain.Entry, adapter platform.Adap
 		entries:    entries,
 		adapter:    adapter,
 		stdout:     stdout,
+		liveConfig: source,
 		proxyCore:  proxyCore,
 		pacHandler: pacHandler,
 		proxy:      &http.Server{Handler: proxyCore},
@@ -277,7 +287,6 @@ func (r *Runtime) Serve(ctx context.Context) error {
 		fmt.Fprintln(r.stdout, "Local CA certificate added to the system trust settings.")
 	}
 
-	go r.watchLiveDomainList(ctx, errs)
 	go r.watchLiveConfig(ctx, errs)
 	go func() { errs <- r.proxy.Serve(r.listeners[0]) }()
 	go func() { errs <- r.pac.Serve(r.listeners[1]) }()
@@ -336,23 +345,6 @@ func Status(stdout, _ io.Writer) error {
 	return nil
 }
 
-func loadDomainList(path string) ([]domain.Entry, []domain.LineError, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	entries, errs := domain.ParseList(string(data))
-	return entries, errs, nil
-}
-
-func formatDomainErrors(errs []domain.LineError) string {
-	var lines []string
-	for _, err := range errs {
-		lines = append(lines, err.Error())
-	}
-	return strings.Join(lines, "\n")
-}
-
 func (r *Runtime) ensureSingleInstance() error {
 	if err := os.MkdirAll(r.runtimeDir, 0o700); err != nil {
 		return err
@@ -390,95 +382,49 @@ func (r *Runtime) writeRuntimeState(state control.RuntimeState) error {
 	return control.WriteRuntimeState(r.statePath, state)
 }
 
-func (r *Runtime) watchLiveDomainList(ctx context.Context, errs chan<- error) {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	var last string
-	var lastPath string
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			path := r.domainListPath()
-			if path != lastPath {
-				last = ""
-				lastPath = path
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				continue
-			}
-			text := string(data)
-			if text == last {
-				continue
-			}
-			entries, parseErrs := domain.ParseList(text)
-			if len(parseErrs) > 0 {
-				select {
-				case errs <- fmt.Errorf("Fatal Domain List Error: invalid Domain List:\n%s", formatDomainErrors(parseErrs)):
-				case <-ctx.Done():
-				}
-				return
-			}
-			r.applyEntries(entries)
-			last = text
-		}
-	}
-}
-
 func (r *Runtime) watchLiveConfig(ctx context.Context, errs chan<- error) {
-	if r.cfg.SourcePath == "" {
-		return
-	}
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	data, _ := os.ReadFile(r.cfg.SourcePath)
-	last := string(data)
+	events := r.liveConfig.Watch(ctx, 100*time.Millisecond)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			data, err := os.ReadFile(r.cfg.SourcePath)
-			if err != nil {
-				continue
+		case event, ok := <-events:
+			if !ok {
+				return
 			}
-			text := string(data)
-			if text == last {
-				continue
-			}
-			loaded, err := config.LoadExisting(r.cfg.SourcePath, r.overrides)
-			if err != nil {
+			if event.Err != nil {
 				select {
-				case errs <- fmt.Errorf("Fatal Config Error: %w", err):
+				case errs <- event.Err:
 				case <-ctx.Done():
 				}
 				return
 			}
-			r.mu.Lock()
-			r.pendingLifecycle = r.lifecycleChangesLocked(loaded.Config)
-			r.cfg.DomainList = loaded.Config.DomainList
-			state := r.controlStateLocked()
-			r.mu.Unlock()
-			r.control.SetState(state)
-			last = text
+			r.applyLiveConfig(event.Snapshot)
 		}
 	}
 }
 
-func (r *Runtime) applyEntries(entries []domain.Entry) {
+func (r *Runtime) applyLiveConfig(snapshot liveconfig.Snapshot) {
 	r.mu.Lock()
-	r.entries = entries
+	r.cfg = activeConfig(snapshot)
+	r.entries = snapshot.Entries
+	r.pendingLifecycle = snapshot.PendingLifecycle
 	state := r.controlStateLocked()
 	r.mu.Unlock()
-	r.proxyCore.SetEntries(entries)
+	r.proxyCore.SetEntries(snapshot.Entries)
 	r.pacHandler.Set(pac.Generate(pac.Options{
 		ProxyListen: r.listeners[0].Addr().String(),
-		CATrusted:   r.cfg.CATrusted,
-		Entries:     entries,
+		CATrusted:   snapshot.CATrusted,
+		Entries:     snapshot.Entries,
 	}))
 	r.control.SetState(state)
+}
+
+func activeConfig(snapshot liveconfig.Snapshot) config.Config {
+	cfg := snapshot.Config
+	cfg.DomainList = snapshot.DomainListPath
+	cfg.CATrusted = snapshot.CATrusted
+	return cfg
 }
 
 func (r *Runtime) controlState() control.State {
@@ -497,20 +443,6 @@ func (r *Runtime) controlStateLocked() control.State {
 		DomainCount:      len(r.entries),
 		PendingLifecycle: append([]string(nil), r.pendingLifecycle...),
 	}
-}
-
-func (r *Runtime) lifecycleChangesLocked(next config.Config) []string {
-	var pending []string
-	if next.CATrusted != r.cfg.CATrusted {
-		pending = append(pending, "ca-trusted")
-	}
-	return pending
-}
-
-func (r *Runtime) domainListPath() string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.cfg.DomainList
 }
 
 func readRuntimeState() (control.RuntimeState, error) {

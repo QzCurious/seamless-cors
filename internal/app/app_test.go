@@ -15,6 +15,7 @@ import (
 	"seamless-cors/internal/config"
 	"seamless-cors/internal/control"
 	"seamless-cors/internal/domain"
+	"seamless-cors/internal/liveconfig"
 	"seamless-cors/internal/platform"
 )
 
@@ -53,10 +54,10 @@ func TestStartGuidanceShowsEditableFilesAndManagedPAC(t *testing.T) {
 	cfg := config.Default()
 	var out bytes.Buffer
 
-	writeStartGuidance(&out, config.LoadResult{
-		Config:     cfg,
-		ConfigPath: "/Users/example/.seamless-cors/config.yaml",
-		DomainPath: "/Users/example/.seamless-cors/domains.txt",
+	writeStartGuidance(&out, liveconfig.Snapshot{
+		Config:         cfg,
+		ConfigPath:     "/Users/example/.seamless-cors/config.yaml",
+		DomainListPath: "/Users/example/.seamless-cors/domains.txt",
 	})
 
 	got := out.String()
@@ -181,7 +182,7 @@ func TestStartRunsCleanupBeforeInvalidConfig(t *testing.T) {
 	}
 	fake := &fakeAdapter{}
 
-	err := StartWithContextAndInput(context.Background(), bytes.NewBufferString(""), &bytes.Buffer{}, config.Overrides{}, fake)
+	err := StartWithContextAndInput(context.Background(), bytes.NewBufferString(""), &bytes.Buffer{}, fake)
 	if err == nil || !strings.Contains(err.Error(), "domain-list") {
 		t.Fatalf("start error = %v", err)
 	}
@@ -215,7 +216,7 @@ func TestStartAllowsEmptyDomainListAndInstallsManagedPAC(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), &out, config.Overrides{}, fake)
+		done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), &out, fake)
 	}()
 	waitForStatusOutput(t, "domains: 0")
 	cancel()
@@ -254,7 +255,7 @@ func TestStartDeclinedLifecycleConsentDoesNotMutateOSOrRuntimeState(t *testing.T
 	}
 	var out bytes.Buffer
 
-	err := StartWithContextAndInput(context.Background(), bytes.NewBufferString("no"), &out, config.Overrides{}, fake)
+	err := StartWithContextAndInput(context.Background(), bytes.NewBufferString("no"), &out, fake)
 	if !errors.Is(err, ErrLifecycleConsentDeclined) {
 		t.Fatalf("start error = %v", err)
 	}
@@ -298,7 +299,7 @@ func TestStartWithVerifiedActiveGatewaySkipsCleanupAndConfigValidation(t *testin
 	secondAdapter := &fakeAdapter{}
 	var out bytes.Buffer
 
-	if err := StartWithContextAndInput(context.Background(), bytes.NewBufferString(""), &out, config.Overrides{}, secondAdapter); err != nil {
+	if err := StartWithContextAndInput(context.Background(), bytes.NewBufferString(""), &out, secondAdapter); err != nil {
 		t.Fatal(err)
 	}
 	if secondAdapter.clearedPAC != 0 || secondAdapter.cleanedCA != 0 {
@@ -548,25 +549,24 @@ func TestRuntimeAppliesEmptyLiveDomainList(t *testing.T) {
 	}
 }
 
-func TestRuntimeLiveConfigPreservesDomainListOverride(t *testing.T) {
+func TestRuntimeLiveConfigFollowsConfigDomainList(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	configDomainPath := filepath.Join(home, "config-domains.txt")
-	overrideDomainPath := filepath.Join(home, "override-domains.txt")
+	firstDomainPath := filepath.Join(home, "first-domains.txt")
+	secondDomainPath := filepath.Join(home, "second-domains.txt")
 	configPath := filepath.Join(home, "config.yaml")
-	if err := os.WriteFile(configDomainPath, []byte("config.example.test\n"), 0o600); err != nil {
+	if err := os.WriteFile(firstDomainPath, []byte("first.example.test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(overrideDomainPath, []byte("override-one.example.test\n"), 0o600); err != nil {
+	if err := os.WriteFile(secondDomainPath, []byte("second-one.example.test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
-	cfg.DomainList = configDomainPath
+	cfg.DomainList = firstDomainPath
 	cfg.SourcePath = configPath
 	writeConfigForRuntime(t, configPath, cfg)
 
-	cfg.DomainList = overrideDomainPath
-	entries, errs, err := loadDomainList(overrideDomainPath)
+	entries, errs, err := loadDomainList(firstDomainPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,7 +577,6 @@ func TestRuntimeLiveConfigPreservesDomainListOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.overrides = config.Overrides{DomainList: overrideDomainPath}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -586,23 +585,28 @@ func TestRuntimeLiveConfigPreservesDomainListOverride(t *testing.T) {
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
 
 	pacURL := "http://" + runtime.listeners[1].Addr().String() + "/seamless-cors.pac"
-	waitForHTTPBody(t, pacURL, "override-one.example.test")
-	waitForStatusOutput(t, "domain-list: "+overrideDomainPath)
+	waitForHTTPBody(t, pacURL, "first.example.test")
+	waitForStatusOutput(t, "domain-list: "+firstDomainPath)
 
 	changed := config.Default()
-	changed.DomainList = configDomainPath
+	changed.DomainList = secondDomainPath
 	changed.SourcePath = configPath
 	changed.CATrusted = true
 	writeConfigForRuntime(t, configPath, changed)
 	waitForStatusOutput(t, "pending lifecycle changes: ca-trusted")
+	if status := currentStatusOutput(t); !strings.Contains(status, "ca-trusted: false") {
+		t.Fatalf("restart-applied lifecycle changed active CA trust:\n%s", status)
+	}
+	waitForStatusOutput(t, "domain-list: "+secondDomainPath)
+	waitForHTTPBody(t, pacURL, "second-one.example.test")
 
-	if err := os.WriteFile(overrideDomainPath, []byte("override-two.example.test\n"), 0o600); err != nil {
+	if err := os.WriteFile(secondDomainPath, []byte("second-two.example.test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	waitForHTTPBody(t, pacURL, "override-two.example.test")
+	waitForHTTPBody(t, pacURL, "second-two.example.test")
 	body := fetchHTTPBody(t, pacURL)
-	if strings.Contains(body, "config.example.test") {
-		t.Fatalf("config domain list replaced override domain list:\n%s", body)
+	if strings.Contains(body, "first.example.test") {
+		t.Fatalf("old Domain List entry remained after config change:\n%s", body)
 	}
 
 	cancel()
@@ -686,6 +690,9 @@ func TestStatusReportsPendingLifecycleChanges(t *testing.T) {
 	writeConfigForRuntime(t, configPath, changed)
 
 	waitForStatusOutput(t, "pending lifecycle changes: ca-trusted")
+	if status := currentStatusOutput(t); !strings.Contains(status, "ca-trusted: false") {
+		t.Fatalf("restart-applied lifecycle changed active CA trust:\n%s", status)
+	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -699,6 +706,15 @@ func writeConfigForRuntime(t *testing.T, path string, cfg config.Config) {
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func loadDomainList(path string) ([]domain.Entry, []domain.LineError, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	entries, errs := domain.ParseList(string(data))
+	return entries, errs, nil
 }
 
 func writeStaleRuntimeState(t *testing.T) string {
@@ -781,4 +797,13 @@ func waitForStatusOutput(t *testing.T, want string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %q in status; last output:\n%s", want, last)
+}
+
+func currentStatusOutput(t *testing.T) string {
+	t.Helper()
+	var out bytes.Buffer
+	if err := Status(&out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
 }

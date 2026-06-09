@@ -6,30 +6,26 @@ import (
 	"io"
 	"strings"
 	"testing"
-
-	"seamless-cors/internal/config"
 )
 
-func TestParseOverridesSupportsCurrentFlags(t *testing.T) {
-	overrides, err := parseOverrides([]string{"--ca-trusted", "--domain-list=domains.txt"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !overrides.CATrustedSet || !overrides.CATrusted {
-		t.Fatalf("ca-trusted override = set:%t value:%t", overrides.CATrustedSet, overrides.CATrusted)
-	}
-	if overrides.DomainList != "domains.txt" {
-		t.Fatalf("domain-list override = %q", overrides.DomainList)
-	}
-}
+func TestStartRejectsConfigurationFlags(t *testing.T) {
+	var stderr bytes.Buffer
 
-func TestParseOverridesRejectsUnknownFlags(t *testing.T) {
-	_, err := parseOverrides([]string{"--log-level=debug"})
-	if err == nil {
-		t.Fatal("expected removed flag to be unknown")
+	err := run([]string{"start", "--ca-trusted"}, io.Discard, &stderr, commandHandlers{
+		start: func(io.Writer, io.Writer) error {
+			t.Fatal("start handler should not run")
+			return nil
+		},
+	})
+	if err != nil {
+		if !strings.Contains(err.Error(), "does not accept configuration flags") {
+			t.Fatalf("error = %v", err)
+		}
+	} else {
+		t.Fatal("expected start flag error")
 	}
-	if !strings.Contains(err.Error(), "unknown flag") {
-		t.Fatalf("error = %v", err)
+	if !strings.Contains(stderr.String(), "edit config.yaml") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 
@@ -38,7 +34,7 @@ func TestRunPrintsStartCommandErrors(t *testing.T) {
 	var stderr bytes.Buffer
 
 	err := run([]string{"start"}, io.Discard, &stderr, commandHandlers{
-		start: func(io.Writer, io.Writer, config.Overrides) error {
+		start: func(io.Writer, io.Writer) error {
 			return wantErr
 		},
 	})

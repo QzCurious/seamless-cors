@@ -172,10 +172,6 @@ _Avoid_: silent cleanup failure, false cleanup success, manual OS instructions f
 A runtime rule where only one gateway process may run for a user at a time, with the Runtime State File used as the first signal that an instance may already be active.
 _Avoid_: multi-instance gateway, competing PAC state, port-based instance detection
 
-**One-Run Override**:
-A start-time flag for a current Explicit Configuration setting that overrides it only for the current gateway process.
-_Avoid_: hidden config mutation, persistent flag change, obsolete flag handling
-
 **First-Start Bootstrap**:
 A startup behavior where missing default config and Domain List files are created automatically before validation continues, allowing the same start command to continue with an Empty Domain List when no active entries exist yet.
 _Avoid_: init command, manual file scaffolding
@@ -569,10 +565,6 @@ QA engineer: "No, Footprint-Based Cleanup acts only on state proven by a seamles
 Developer: "Can I run two gateways at once?"
 
 QA engineer: "No, Single User Instance uses the Runtime State File to guard active gateway state."
-
-Developer: "Do start flags edit my config file?"
-
-QA engineer: "No, One-Run Override applies only to the current gateway process."
 
 Developer: "Can config paths use `~` or environment variables?"
 
