@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -24,9 +25,9 @@ import (
 	"seamless-cors/internal/pac"
 	"seamless-cors/internal/platform"
 	"seamless-cors/internal/proxy"
-
-	"golang.org/x/term"
 )
+
+var ErrLifecycleConsentDeclined = errors.New("explicit lifecycle consent declined")
 
 func Start(stdout, _ io.Writer, overrides config.Overrides) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -39,6 +40,15 @@ func StartWithContext(ctx context.Context, stdout io.Writer, overrides config.Ov
 }
 
 func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Writer, overrides config.Overrides, adapter platform.Adapter) error {
+	if active, err := activeRuntimeState(); err != nil {
+		return err
+	} else if active {
+		fmt.Fprintln(stdout, "seamless-cors is already running")
+		return nil
+	}
+	if err := RuntimeCleanup(stdout, adapter); err != nil {
+		return err
+	}
 	loaded, err := config.LoadOrBootstrap("", overrides, stdout)
 	if err != nil {
 		return err
@@ -53,10 +63,17 @@ func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Wr
 	if len(entries) == 0 {
 		return fmt.Errorf("Domain List has no active entries; add at least one domain to %s", loaded.DomainPath)
 	}
-	if loaded.Config.CATrusted {
-		if err := promptForCATrust(stdin, stdout); err != nil {
-			return err
-		}
+	pacStates, err := adapter.CurrentPACState()
+	if err != nil {
+		return err
+	}
+	consent := lifecycleConsentRequest{
+		ManagedPAC:      platform.HasForeignEnabledPACState(pacStates),
+		CATrust:         loaded.Config.CATrusted,
+		CurrentPACState: pacStates,
+	}
+	if err := promptForLifecycleConsent(stdin, stdout, consent); err != nil {
+		return err
 	}
 
 	runtime, err := NewRuntime(loaded.Config, entries, adapter, stdout)
@@ -78,42 +95,63 @@ func writeStartGuidance(stdout io.Writer, loaded config.LoadResult) {
 	}
 }
 
-func promptForCATrust(stdin io.Reader, stdout io.Writer) error {
-	fmt.Fprintln(stdout, "ca-trusted: true requires adding the local CA certificate to the system trust settings.")
-	fmt.Fprintln(stdout, "You will see a system prompt asking for administrator approval to make this change.")
-	fmt.Fprintln(stdout)
-	fmt.Fprint(stdout, "Press any key to continue...")
-	if err := waitForKey(stdin); err != nil {
+type lifecycleConsentRequest struct {
+	ManagedPAC      bool
+	CATrust         bool
+	CurrentPACState []platform.PACServiceState
+}
+
+func (r lifecycleConsentRequest) needed() bool {
+	return r.ManagedPAC || r.CATrust
+}
+
+func promptForLifecycleConsent(stdin io.Reader, stdout io.Writer, req lifecycleConsentRequest) error {
+	if !req.needed() {
+		return nil
+	}
+	fmt.Fprintln(stdout, "Explicit Lifecycle Consent required before seamless-cors changes current-user OS-managed state.")
+	if req.ManagedPAC {
 		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Managed PAC Consent:")
+		fmt.Fprintln(stdout, "seamless-cors will replace existing managed PAC state for this run.")
+		fmt.Fprintln(stdout, "Runtime Cleanup removes seamless-cors PAC settings without restoring previous PAC state.")
+		fmt.Fprintln(stdout, "Current managed PAC state:")
+		for _, state := range req.CurrentPACState {
+			if state.URL == "" {
+				state.URL = "(empty)"
+			}
+			fmt.Fprintf(stdout, "  %s: enabled=%t url=%s\n", state.Name, state.Enabled, state.URL)
+		}
+	}
+	if req.CATrust {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "CA Trust Consent:")
+		fmt.Fprintln(stdout, "ca-trusted: true adds an ephemeral seamless-cors development CA to the current user's OS trust store for this run.")
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprint(stdout, "Proceed? [y/N] ")
+	ok, err := readYes(stdin)
+	if err != nil {
 		return err
+	}
+	if !ok {
+		fmt.Fprintln(stdout, "Startup canceled; no lifecycle changes were applied.")
+		return ErrLifecycleConsentDeclined
 	}
 	fmt.Fprintln(stdout)
 	return nil
 }
 
-func waitForKey(stdin io.Reader) error {
+func readYes(stdin io.Reader) (bool, error) {
 	if stdin == nil {
-		return nil
+		return true, nil
 	}
-	if file, ok := stdin.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
-		oldState, err := term.MakeRaw(int(file.Fd()))
-		if err != nil {
-			return err
-		}
-		defer term.Restore(int(file.Fd()), oldState)
+	answer, err := bufio.NewReader(stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
 	}
-	var buf [1]byte
-	n, err := stdin.Read(buf[:])
-	if errors.Is(err, io.EOF) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if n > 0 && buf[0] == 0x03 {
-		return context.Canceled
-	}
-	return err
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	return answer == "y" || answer == "yes", nil
 }
 
 type Runtime struct {
@@ -223,17 +261,20 @@ func (r *Runtime) Serve(ctx context.Context) error {
 	errs := make(chan error, 4)
 	go func() { errs <- r.control.Serve(r.listeners[2]) }()
 
-	if err := r.adapter.InstallPAC("http://" + r.listeners[1].Addr().String() + "/proxy.pac"); err != nil {
+	if err := r.adapter.InstallPAC("http://" + r.listeners[1].Addr().String() + "/" + platform.PACFootprintFileName); err != nil {
 		r.Close()
 		return err
 	}
 	if r.cfg.CATrusted {
 		authority, err := ca.Create(r.runtimeDir, r.adapter)
 		if err != nil {
-			r.Close()
+			cleanupErr := r.Close()
 			if errors.Is(err, platform.ErrTrustApprovalDenied) {
 				fmt.Fprintln(r.stdout, "Certificate trust was not approved.")
 				fmt.Fprintln(r.stdout, "Run the command again and approve the system prompt, or set ca-trusted: false.")
+			}
+			if cleanupErr != nil {
+				return fmt.Errorf("%w; %v", err, cleanupErr)
 			}
 			return err
 		}
@@ -265,32 +306,30 @@ func (r *Runtime) Close() error {
 	_ = r.proxy.Close()
 	_ = r.pac.Close()
 	_ = r.control.Close(ctx)
-	_ = r.adapter.RestoreProxy()
-	_ = ca.Remove(r.authority, r.adapter)
-	_ = os.Remove(r.statePath)
-	return nil
+	return RuntimeCleanup(r.stdout, r.adapter)
 }
 
 func Stop(stdout, _ io.Writer) error {
 	state, err := readRuntimeState()
 	if err != nil {
 		fmt.Fprintln(stdout, "seamless-cors stop requested; no running seamless-cors found")
-		return nil
+		return RuntimeCleanup(stdout, platform.CurrentAdapter)
 	}
 	stopped, err := control.CallStop("http://"+state.ControlListen, state.Token, stdout)
 	if err != nil {
 		return err
 	}
-	if !stopped {
-		staleRuntimeCleanup(state, stdout, platform.CurrentAdapter)
+	if stopped {
+		waitForRuntimeToStop(state)
 	}
-	return nil
+	return RuntimeCleanup(stdout, platform.CurrentAdapter)
 }
 
 func Status(stdout, _ io.Writer) error {
 	state, err := readRuntimeState()
 	if err != nil {
 		fmt.Fprintln(stdout, "seamless-cors status: not running")
+		reportCleanupNeeded(stdout, platform.CurrentAdapter, false)
 		return nil
 	}
 	if err := control.CallStatus("http://"+state.ControlListen, state.Token, stdout); err != nil {
@@ -298,6 +337,7 @@ func Status(stdout, _ io.Writer) error {
 	}
 	if _, err := control.FetchStatus("http://"+state.ControlListen, state.Token); err != nil {
 		fmt.Fprintln(stdout, "stale runtime state detected; run start or stop to clean up")
+		reportCleanupNeeded(stdout, platform.CurrentAdapter, true)
 	}
 	return nil
 }
@@ -334,8 +374,7 @@ func (r *Runtime) ensureSingleInstance() error {
 	if runtimeStateIsActive(state) {
 		return fmt.Errorf("seamless-cors is already running")
 	}
-	staleRuntimeCleanup(state, r.stdout, r.adapter)
-	return nil
+	return RuntimeCleanup(r.stdout, r.adapter)
 }
 
 func (r *Runtime) writeRuntimeState(state control.RuntimeState) error {
@@ -351,7 +390,9 @@ func (r *Runtime) writeRuntimeState(state control.RuntimeState) error {
 	if runtimeStateIsActive(existing) {
 		return fmt.Errorf("seamless-cors is already running")
 	}
-	staleRuntimeCleanup(existing, r.stdout, r.adapter)
+	if err := RuntimeCleanup(r.stdout, r.adapter); err != nil {
+		return err
+	}
 	return control.WriteRuntimeState(r.statePath, state)
 }
 
@@ -493,17 +534,84 @@ func randomToken() (string, error) {
 	return hex.EncodeToString(bytes[:]), nil
 }
 
-func staleRuntimeCleanup(state control.RuntimeState, stdout io.Writer, adapter platform.Adapter) {
+func RuntimeCleanup(stdout io.Writer, adapter platform.Adapter) error {
 	runtimeDir, err := config.RuntimeDir()
 	if err != nil {
-		return
+		return err
 	}
-	_ = adapter.RestoreProxy()
-	_ = ca.Recover(filepath.Join(runtimeDir, "ca-marker.json"), adapter)
-	_ = os.Remove(filepath.Join(runtimeDir, "control-state.json"))
-	if stdout != nil && state.ControlListen != "" {
-		fmt.Fprintln(stdout, "cleaned stale seamless-cors runtime state")
+	var errs []error
+	if err := adapter.ClearOwnedPAC(); err != nil {
+		errs = append(errs, fmt.Errorf("managed PAC cleanup failed: %w", err))
 	}
+	if err := adapter.CleanupCAFootprint(); err != nil {
+		errs = append(errs, fmt.Errorf("CA trust cleanup failed: %w", err))
+	}
+	for _, name := range []string{"ephemeral-ca.pem", "ephemeral-ca-key.pem", "ca-marker.json", "control-state.json"} {
+		err := os.Remove(filepath.Join(runtimeDir, name))
+		if err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("runtime file cleanup failed for %s: %w", name, err))
+		}
+	}
+	if len(errs) > 0 {
+		return cleanupError{errs: errs}
+	}
+	return nil
+}
+
+type cleanupError struct {
+	errs []error
+}
+
+func (e cleanupError) Error() string {
+	var parts []string
+	for _, err := range e.errs {
+		parts = append(parts, err.Error())
+	}
+	return strings.Join(parts, "; ") + "\nCleanup failed; resolve the OS or permission problem, then run `seamless-cors stop` again."
+}
+
+func activeRuntimeState() (bool, error) {
+	state, err := readRuntimeState()
+	if err != nil {
+		return false, nil
+	}
+	return runtimeStateIsActive(state), nil
+}
+
+func waitForRuntimeToStop(state control.RuntimeState) {
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if !runtimeStateIsActive(state) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func reportCleanupNeeded(stdout io.Writer, adapter platform.Adapter, staleState bool) {
+	needed := staleState || runtimeFilesNeedCleanup()
+	if states, err := adapter.CurrentPACState(); err == nil && platform.HasOwnedPACState(states) {
+		needed = true
+	}
+	if hasCA, err := adapter.HasCAFootprint(); err == nil && hasCA {
+		needed = true
+	}
+	if needed {
+		fmt.Fprintln(stdout, "cleanup-needed: run `seamless-cors stop` to clean seamless-cors-owned runtime state")
+	}
+}
+
+func runtimeFilesNeedCleanup() bool {
+	runtimeDir, err := config.RuntimeDir()
+	if err != nil {
+		return false
+	}
+	for _, name := range []string{"ephemeral-ca.pem", "ephemeral-ca-key.pem", "ca-marker.json", "control-state.json"} {
+		if _, err := os.Stat(filepath.Join(runtimeDir, name)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func runtimeStateIsActive(state control.RuntimeState) bool {

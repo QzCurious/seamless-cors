@@ -5,6 +5,7 @@ package platform
 import (
 	"bytes"
 	"crypto/sha1"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
@@ -14,13 +15,14 @@ import (
 	"strings"
 )
 
+const ephemeralCACommonName = "seamless-cors Ephemeral User CA"
+
 func init() {
 	CurrentAdapter = NewDarwinAdapter()
 }
 
 type DarwinAdapter struct {
 	runner       commandRunner
-	services     []proxyServiceState
 	certPath     string
 	certSHA1     string
 	keychainPath string
@@ -36,12 +38,6 @@ func (execRunner) run(name string, args ...string) ([]byte, error) {
 	return exec.Command(name, args...).CombinedOutput()
 }
 
-type proxyServiceState struct {
-	Name    string
-	URL     string
-	Enabled bool
-}
-
 func NewDarwinAdapter() *DarwinAdapter {
 	return &DarwinAdapter{runner: execRunner{}}
 }
@@ -51,13 +47,7 @@ func (a *DarwinAdapter) InstallPAC(url string) error {
 	if err != nil {
 		return err
 	}
-	a.services = nil
 	for _, service := range services {
-		state, err := a.getAutoProxy(service)
-		if err != nil {
-			return err
-		}
-		a.services = append(a.services, state)
 		if _, err := a.networksetup("-setautoproxyurl", service, url); err != nil {
 			return err
 		}
@@ -68,19 +58,36 @@ func (a *DarwinAdapter) InstallPAC(url string) error {
 	return nil
 }
 
-func (a *DarwinAdapter) RestoreProxy() error {
+func (a *DarwinAdapter) CurrentPACState() ([]PACServiceState, error) {
+	services, err := a.listServices()
+	if err != nil {
+		return nil, err
+	}
+	states := make([]PACServiceState, 0, len(services))
+	for _, service := range services {
+		state, err := a.getAutoProxy(service)
+		if err != nil {
+			return nil, err
+		}
+		states = append(states, state)
+	}
+	return states, nil
+}
+
+func (a *DarwinAdapter) ClearOwnedPAC() error {
+	states, err := a.CurrentPACState()
+	if err != nil {
+		return err
+	}
 	var firstErr error
-	for _, state := range a.services {
-		if state.URL != "" && state.URL != "(null)" {
-			if _, err := a.networksetup("-setautoproxyurl", state.Name, state.URL); err != nil && firstErr == nil {
-				firstErr = err
-			}
+	for _, state := range states {
+		if !IsManagedPACFootprint(state.URL) {
+			continue
 		}
-		next := "off"
-		if state.Enabled {
-			next = "on"
+		if _, err := a.networksetup("-setautoproxystate", state.Name, "off"); err != nil && firstErr == nil {
+			firstErr = err
 		}
-		if _, err := a.networksetup("-setautoproxystate", state.Name, next); err != nil && firstErr == nil {
+		if _, err := a.networksetup("-setautoproxyurl", state.Name, ""); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -110,10 +117,22 @@ func (a *DarwinAdapter) TrustCA(certPEM []byte) error {
 	return err
 }
 
-func (a *DarwinAdapter) RemoveCA() error {
+func (a *DarwinAdapter) HasCAFootprint() (bool, error) {
+	fingerprints, err := a.caFootprintSHA1s()
+	if err != nil {
+		return false, err
+	}
+	return len(fingerprints) > 0, nil
+}
+
+func (a *DarwinAdapter) CleanupCAFootprint() error {
+	fingerprints, err := a.caFootprintSHA1s()
+	if err != nil {
+		return err
+	}
 	var firstErr error
-	if a.certSHA1 != "" {
-		if _, err := a.security("delete-certificate", "-Z", a.certSHA1, a.keychain()); err != nil && firstErr == nil {
+	for _, fingerprint := range fingerprints {
+		if _, err := a.security("delete-certificate", "-Z", fingerprint, a.keychain()); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -141,12 +160,12 @@ func (a *DarwinAdapter) listServices() ([]string, error) {
 	return services, nil
 }
 
-func (a *DarwinAdapter) getAutoProxy(service string) (proxyServiceState, error) {
+func (a *DarwinAdapter) getAutoProxy(service string) (PACServiceState, error) {
 	out, err := a.networksetup("-getautoproxyurl", service)
 	if err != nil {
-		return proxyServiceState{}, err
+		return PACServiceState{}, err
 	}
-	state := proxyServiceState{Name: service}
+	state := PACServiceState{Name: service}
 	for _, line := range strings.Split(string(out), "\n") {
 		key, value, ok := strings.Cut(line, ":")
 		if !ok {
@@ -161,6 +180,68 @@ func (a *DarwinAdapter) getAutoProxy(service string) (proxyServiceState, error) 
 		}
 	}
 	return state, nil
+}
+
+func (a *DarwinAdapter) caFootprintSHA1s() ([]string, error) {
+	out, err := a.security("find-certificate", "-a", "-c", ephemeralCACommonName, "-p", "-Z", a.keychain())
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "could not be found") ||
+			strings.Contains(strings.ToLower(string(out)), "could not be found") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return strictCAFootprintSHA1s(out), nil
+}
+
+func strictCAFootprintSHA1s(out []byte) []string {
+	var fingerprints []string
+	var currentSHA1 string
+	var pemLines []string
+	for _, line := range strings.Split(string(out), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if value, ok := strings.CutPrefix(trimmed, "SHA-1 hash: "); ok {
+			if fingerprintMatchesStrictCA(currentSHA1, pemLines) {
+				fingerprints = append(fingerprints, currentSHA1)
+			}
+			currentSHA1 = strings.TrimSpace(value)
+			pemLines = nil
+		} else if currentSHA1 != "" {
+			pemLines = append(pemLines, line)
+		}
+	}
+	if fingerprintMatchesStrictCA(currentSHA1, pemLines) {
+		fingerprints = append(fingerprints, currentSHA1)
+	}
+	return fingerprints
+}
+
+func fingerprintMatchesStrictCA(fingerprint string, pemLines []string) bool {
+	if fingerprint == "" || len(pemLines) == 0 {
+		return false
+	}
+	block, _ := pem.Decode([]byte(strings.Join(pemLines, "\n")))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return false
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return false
+	}
+	return isStrictCAFootprint(cert)
+}
+
+func isStrictCAFootprint(cert *x509.Certificate) bool {
+	if cert.Subject.CommonName != ephemeralCACommonName {
+		return false
+	}
+	if !cert.IsCA || !cert.BasicConstraintsValid {
+		return false
+	}
+	if cert.KeyUsage&x509.KeyUsageCertSign == 0 || cert.KeyUsage&x509.KeyUsageCRLSign == 0 {
+		return false
+	}
+	return cert.CheckSignatureFrom(cert) == nil
 }
 
 func (a *DarwinAdapter) networksetup(args ...string) ([]byte, error) {

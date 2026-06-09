@@ -3,6 +3,8 @@ package ca
 import (
 	"os"
 	"testing"
+
+	"seamless-cors/internal/platform"
 )
 
 type fakeTrustStore struct {
@@ -11,12 +13,16 @@ type fakeTrustStore struct {
 }
 
 func (f *fakeTrustStore) InstallPAC(string) error { return nil }
-func (f *fakeTrustStore) RestoreProxy() error     { return nil }
+func (f *fakeTrustStore) CurrentPACState() ([]platform.PACServiceState, error) {
+	return nil, nil
+}
+func (f *fakeTrustStore) ClearOwnedPAC() error          { return nil }
+func (f *fakeTrustStore) HasCAFootprint() (bool, error) { return false, nil }
 func (f *fakeTrustStore) TrustCA([]byte) error {
 	f.trusted++
 	return nil
 }
-func (f *fakeTrustStore) RemoveCA() error {
+func (f *fakeTrustStore) CleanupCAFootprint() error {
 	f.removed++
 	return nil
 }
@@ -32,7 +38,7 @@ func TestEphemeralAuthorityCreatesTrustsAndFullyRemovesCA(t *testing.T) {
 	if fake.trusted != 1 {
 		t.Fatalf("trust calls = %d", fake.trusted)
 	}
-	for _, path := range []string{authority.CertPath, authority.KeyPath, authority.MarkerPath} {
+	for _, path := range []string{authority.CertPath, authority.KeyPath} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected %s to exist: %v", path, err)
 		}
@@ -44,28 +50,9 @@ func TestEphemeralAuthorityCreatesTrustsAndFullyRemovesCA(t *testing.T) {
 	if fake.removed != 1 {
 		t.Fatalf("remove calls = %d", fake.removed)
 	}
-	for _, path := range []string{authority.CertPath, authority.KeyPath, authority.MarkerPath} {
+	for _, path := range []string{authority.CertPath, authority.KeyPath} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("expected %s to be removed, stat err=%v", path, err)
 		}
-	}
-}
-
-func TestCARecoveryOnlyUsesCAMarker(t *testing.T) {
-	dir := t.TempDir()
-	fake := &fakeTrustStore{}
-	authority, err := Create(dir, fake)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := Recover(authority.MarkerPath, fake); err != nil {
-		t.Fatal(err)
-	}
-	if fake.removed != 1 {
-		t.Fatalf("remove calls = %d", fake.removed)
-	}
-	if _, err := os.Stat(authority.CertPath); !os.IsNotExist(err) {
-		t.Fatalf("cert should be recovered/removed, err=%v", err)
 	}
 }
