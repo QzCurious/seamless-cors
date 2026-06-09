@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,7 +21,6 @@ type Options struct {
 	Entries   []domain.Entry
 	CATrusted bool
 	Authority *ca.EphemeralAuthority
-	Logger    io.Writer
 	Transport http.RoundTripper
 }
 
@@ -31,7 +29,6 @@ type Core struct {
 	mu        sync.RWMutex
 	caTrusted bool
 	authority *ca.EphemeralAuthority
-	logger    *log.Logger
 	transport http.RoundTripper
 }
 
@@ -40,11 +37,7 @@ func New(opts Options) *Core {
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	var logger *log.Logger
-	if opts.Logger != nil {
-		logger = log.New(opts.Logger, "", 0)
-	}
-	return &Core{entries: opts.Entries, caTrusted: opts.CATrusted, authority: opts.Authority, logger: logger, transport: transport}
+	return &Core{entries: opts.Entries, caTrusted: opts.CATrusted, authority: opts.Authority, transport: transport}
 }
 
 func (c *Core) SetAuthority(authority *ca.EphemeralAuthority) {
@@ -70,9 +63,6 @@ func (c *Core) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if !c.matches(target) {
 		cors.WriteGatewayError(w, req, http.StatusForbidden, "unmatched", fmt.Errorf("host is not in Domain List"))
 		return
-	}
-	if c.logger != nil {
-		c.logger.Printf("matched %s %s", req.Method, target.String())
 	}
 	if cors.IsPreflight(req) {
 		cors.WritePreflight(w, req)

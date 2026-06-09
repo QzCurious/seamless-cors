@@ -12,7 +12,6 @@ import (
 
 type Config struct {
 	DomainList string `yaml:"domain-list"`
-	LogLevel   string `yaml:"log-level"`
 	CATrusted  bool   `yaml:"ca-trusted"`
 	SourcePath string `yaml:"-"`
 }
@@ -30,7 +29,6 @@ type LoadResult struct {
 
 type Overrides struct {
 	DomainList   string
-	LogLevel     string
 	CATrusted    bool
 	CATrustedSet bool
 }
@@ -38,7 +36,6 @@ type Overrides struct {
 func Default() Config {
 	return Config{
 		DomainList: "~/.seamless-cors/domains.txt",
-		LogLevel:   "info",
 		CATrusted:  false,
 	}
 }
@@ -154,9 +151,6 @@ func ApplyOverrides(cfg Config, overrides Overrides) Config {
 	if overrides.DomainList != "" {
 		cfg.DomainList = overrides.DomainList
 	}
-	if overrides.LogLevel != "" {
-		cfg.LogLevel = overrides.LogLevel
-	}
 	if overrides.CATrustedSet {
 		cfg.CATrusted = overrides.CATrusted
 	}
@@ -168,9 +162,6 @@ func (o Overrides) Names() []string {
 	if o.DomainList != "" {
 		names = append(names, "domain-list")
 	}
-	if o.LogLevel != "" {
-		names = append(names, "log-level")
-	}
 	if o.CATrustedSet {
 		names = append(names, "ca-trusted")
 	}
@@ -181,12 +172,7 @@ func Validate(cfg Config) error {
 	if cfg.DomainList == "" {
 		return fmt.Errorf("domain-list is required")
 	}
-	switch cfg.LogLevel {
-	case "debug", "info", "warn", "error":
-		return nil
-	default:
-		return fmt.Errorf("log-level must be debug, info, warn, or error")
-	}
+	return nil
 }
 
 func ExpandPath(path string) (string, error) {
@@ -220,13 +206,6 @@ func bootstrap(configPath string) error {
 func commentedDefaultConfig() string {
 	return `# One domain or origin per line.
 domain-list: ~/.seamless-cors/domains.txt
-
-# Logging verbosity. Copy one of these values into the active setting:
-# log-level: debug
-# log-level: info
-# log-level: warn
-# log-level: error
-log-level: info
 
 # Opt into HTTPS interception. Generated CA is removed on stop.
 ca-trusted: false

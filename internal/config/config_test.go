@@ -12,9 +12,6 @@ func TestDefaultConfigMatchesPRD(t *testing.T) {
 	if cfg.DomainList != "~/.seamless-cors/domains.txt" {
 		t.Fatalf("DomainList = %q", cfg.DomainList)
 	}
-	if cfg.LogLevel != "info" {
-		t.Fatalf("LogLevel = %q", cfg.LogLevel)
-	}
 	if cfg.CATrusted {
 		t.Fatalf("CATrusted = true")
 	}
@@ -25,7 +22,7 @@ func TestLoadIgnoresUnknownConfigKeys(t *testing.T) {
 	t.Setenv("HOME", home)
 	configPath := filepath.Join(home, "config.yaml")
 	domainPath := filepath.Join(home, "domains.txt")
-	if err := os.WriteFile(configPath, []byte("unknown-setting: ignored\ndomain-list: "+domainPath+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("unknown-setting: ignored\nlog-level: ignored\ndomain-list: "+domainPath+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -69,15 +66,8 @@ func TestLoadOrBootstrapCreatesCommentedDefaultsAndAppliesOverrides(t *testing.T
 	if !bytes.Contains(configText, []byte("# One domain or origin per line.")) {
 		t.Fatalf("generated config is not commented:\n%s", configText)
 	}
-	for _, line := range []string{
-		"# log-level: debug",
-		"# log-level: info",
-		"# log-level: warn",
-		"# log-level: error",
-	} {
-		if !bytes.Contains(configText, []byte(line)) {
-			t.Fatalf("generated config missing %q:\n%s", line, configText)
-		}
+	if bytes.Contains(configText, []byte("log-level")) {
+		t.Fatalf("generated config included obsolete log-level setting:\n%s", configText)
 	}
 	if !bytes.Contains(out.Bytes(), []byte("Created:")) {
 		t.Fatalf("bootstrap output = %q", out.String())

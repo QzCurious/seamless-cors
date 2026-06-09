@@ -101,7 +101,7 @@ A clean-break configuration behavior where only current settings affect gateway 
 _Avoid_: backward-compatible alias, migration, obsolete-setting special case
 
 **Fatal Config Error**:
-A configuration behavior where an invalid config file causes the gateway to log the validation problem, perform Runtime Cleanup, and stop.
+A configuration behavior where an invalid config file causes the gateway to report the validation problem, perform Runtime Cleanup, and stop.
 _Avoid_: silent config fallback, stale config after invalid edit
 
 **Lifecycle Operation**:
@@ -252,18 +252,6 @@ _Avoid_: status-triggered cleanup, mutating status command
 An automatically selected listener address shown by status for troubleshooting, not for user proxy setup or configuration.
 _Avoid_: setup address, configured listener, manual proxy instruction
 
-**Full URL Logging**:
-A diagnostic behavior where request logs include full URLs, including query strings, for DEV/QA debugging.
-_Avoid_: query redaction by default
-
-**Matched Request Logging**:
-A diagnostic behavior where every request routed through the gateway because of a Domain List match is logged.
-_Avoid_: repair-only logging, error-only logging
-
-**Unmatched Quiet Mode**:
-A diagnostic behavior where unmatched traffic is not logged during Managed System Proxy operation.
-_Avoid_: noisy unmatched logging, unrelated browsing logs
-
 **Domain List**:
 The user-managed newline-delimited set of upstream hostnames or origins where the gateway is allowed to adjust browser-origin behavior during DEV/QA work.
 _Avoid_: routing table, interception rules, proxy rules
@@ -281,7 +269,7 @@ A startup validation behavior where a Domain List with invalid lines fails befor
 _Avoid_: silent invalid entry, invalid-as-empty, partial startup warning
 
 **Fatal Domain List Error**:
-A live configuration behavior where an invalid Domain List edit logs the line-level validation problem, performs Runtime Cleanup, and stops the gateway.
+A live configuration behavior where an invalid Domain List edit reports the line-level validation problem, performs Runtime Cleanup, and stops the gateway.
 _Avoid_: stale valid routing, partial valid routing, silent invalid entry
 
 **Domain List Entry**:
@@ -480,7 +468,7 @@ QA engineer: "No, Live Configuration applies the newest values to incoming reque
 
 Developer: "What happens if I save an invalid config file while the gateway is running?"
 
-QA engineer: "Fatal Config Error logs the validation problem, performs Runtime Cleanup, and stops the gateway."
+QA engineer: "Fatal Config Error reports the validation problem, performs Runtime Cleanup, and stops the gateway."
 
 Developer: "What if my config still has removed listener or managed-proxy settings?"
 
@@ -496,7 +484,7 @@ QA engineer: "Three Commands: `start`, `stop`, and `status`."
 
 Developer: "Does `start` launch a background service?"
 
-QA engineer: "No, Foreground Start keeps logs visible and lets Ctrl-C run Runtime Cleanup in v1."
+QA engineer: "No, Foreground Start keeps the gateway attached and lets Ctrl-C run Runtime Cleanup in v1."
 
 Developer: "Does Ctrl-C clean up the proxy and CA?"
 
@@ -521,18 +509,6 @@ QA engineer: "Diagnostic Runtime Endpoint values are shown for troubleshooting, 
 Developer: "What if status finds a stale Runtime State File?"
 
 QA engineer: "Read-Only Status reports that the gateway is not running and leaves cleanup to start or stop."
-
-Developer: "Will logs include query strings?"
-
-QA engineer: "Yes, Full URL Logging includes query strings for DEV/QA debugging."
-
-Developer: "How do I know a Domain List entry is actually being used?"
-
-QA engineer: "Matched Request Logging logs every matched request routed through the gateway."
-
-Developer: "Will unrelated traffic fill the logs?"
-
-QA engineer: "No, Unmatched Quiet Mode keeps unrelated traffic out of normal logs."
 
 Developer: "Can editing configuration unexpectedly trigger an OS permission prompt?"
 
@@ -632,7 +608,7 @@ QA engineer: "Line-Level Domain Validation reports the invalid line, and Invalid
 
 Developer: "What if I save an invalid Domain List while the gateway is running?"
 
-QA engineer: "Fatal Domain List Error logs the line-level validation problem, performs Runtime Cleanup, and stops the gateway."
+QA engineer: "Fatal Domain List Error reports the line-level validation problem, performs Runtime Cleanup, and stops the gateway."
 
 Developer: "Does `api.dev.example.com` include its subdomains?"
 

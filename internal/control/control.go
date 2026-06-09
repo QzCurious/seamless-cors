@@ -19,7 +19,6 @@ type State struct {
 	PACListen        string   `json:"pacListen"`
 	ControlListen    string   `json:"controlListen"`
 	DomainList       string   `json:"domainList"`
-	LogLevel         string   `json:"logLevel"`
 	CATrusted        bool     `json:"caTrusted"`
 	DomainCount      int      `json:"domainCount"`
 	PendingLifecycle []string `json:"pendingLifecycle,omitempty"`
@@ -145,7 +144,6 @@ func CallStatus(baseURL, token string, stdout io.Writer) error {
 	fmt.Fprintf(stdout, "runtime-pac-endpoint: %s\n", state.PACListen)
 	fmt.Fprintf(stdout, "runtime-control-endpoint: %s\n", state.ControlListen)
 	fmt.Fprintf(stdout, "domain-list: %s\n", state.DomainList)
-	fmt.Fprintf(stdout, "log-level: %s\n", state.LogLevel)
 	fmt.Fprintf(stdout, "domains: %d\n", state.DomainCount)
 	fmt.Fprintln(stdout, "managed-pac: active")
 	fmt.Fprintf(stdout, "ca-trusted: %t\n", state.CATrusted)

@@ -11,7 +11,7 @@ import (
 )
 
 func TestParseOverridesSupportsCurrentFlags(t *testing.T) {
-	overrides, err := parseOverrides([]string{"--ca-trusted", "--domain-list=domains.txt", "--log-level=debug"})
+	overrides, err := parseOverrides([]string{"--ca-trusted", "--domain-list=domains.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,13 +21,10 @@ func TestParseOverridesSupportsCurrentFlags(t *testing.T) {
 	if overrides.DomainList != "domains.txt" {
 		t.Fatalf("domain-list override = %q", overrides.DomainList)
 	}
-	if overrides.LogLevel != "debug" {
-		t.Fatalf("log-level override = %q", overrides.LogLevel)
-	}
 }
 
 func TestParseOverridesRejectsUnknownFlags(t *testing.T) {
-	_, err := parseOverrides([]string{"--unknown-setting=false"})
+	_, err := parseOverrides([]string{"--log-level=debug"})
 	if err == nil {
 		t.Fatal("expected removed flag to be unknown")
 	}

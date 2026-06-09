@@ -71,7 +71,6 @@ func parseOverrides(args []string) (config.Overrides, error) {
 	var overrides config.Overrides
 	flags.BoolVar(&overrides.CATrusted, "ca-trusted", false, "trust ephemeral development CA for this run")
 	flags.StringVar(&overrides.DomainList, "domain-list", "", "domain list path")
-	flags.StringVar(&overrides.LogLevel, "log-level", "", "log level")
 
 	if err := flags.Parse(args); err != nil {
 		return config.Overrides{}, err

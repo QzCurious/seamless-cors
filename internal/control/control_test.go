@@ -14,7 +14,6 @@ func TestControlEndpointReportsHumanStatusAndAcceptsStop(t *testing.T) {
 		PACListen:     "127.0.0.1:49153",
 		ControlListen: "127.0.0.1:0",
 		DomainList:    "/Users/example/.seamless-cors/domains.txt",
-		LogLevel:      "debug",
 		CATrusted:     false,
 		DomainCount:   2,
 	}, "secret-token")
@@ -35,12 +34,14 @@ func TestControlEndpointReportsHumanStatusAndAcceptsStop(t *testing.T) {
 	}
 	for _, want := range []string{
 		"domain-list: /Users/example/.seamless-cors/domains.txt",
-		"log-level: debug",
 		"domains: 2",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("status output missing %q: %q", want, out.String())
 		}
+	}
+	if strings.Contains(out.String(), "log-level") {
+		t.Fatalf("status output included obsolete log-level: %q", out.String())
 	}
 	resp, err := http.Post(base+"/stop", "text/plain", nil)
 	if err != nil {

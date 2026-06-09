@@ -176,13 +176,13 @@ func TestStartRunsCleanupBeforeInvalidConfig(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("log-level: nope\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("domain-list: \"\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	fake := &fakeAdapter{}
 
 	err := StartWithContextAndInput(context.Background(), bytes.NewBufferString(""), &bytes.Buffer{}, config.Overrides{}, fake)
-	if err == nil || !strings.Contains(err.Error(), "log-level") {
+	if err == nil || !strings.Contains(err.Error(), "domain-list") {
 		t.Fatalf("start error = %v", err)
 	}
 	if fake.clearedPAC != 1 {
@@ -203,7 +203,6 @@ func TestStartAllowsEmptyDomainListAndInstallsManagedPAC(t *testing.T) {
 	}
 	writeConfigForRuntime(t, filepath.Join(configDir, "config.yaml"), config.Config{
 		DomainList: domainPath,
-		LogLevel:   "info",
 		CATrusted:  false,
 	})
 	if err := os.WriteFile(domainPath, []byte("# add domains when needed\n\n"), 0o600); err != nil {
@@ -241,7 +240,6 @@ func TestStartDeclinedLifecycleConsentDoesNotMutateOSOrRuntimeState(t *testing.T
 	}
 	writeConfigForRuntime(t, filepath.Join(configDir, "config.yaml"), config.Config{
 		DomainList: domainPath,
-		LogLevel:   "info",
 		CATrusted:  true,
 	})
 	if err := os.WriteFile(domainPath, []byte("api.example.test\n"), 0o600); err != nil {
@@ -294,7 +292,7 @@ func TestStartWithVerifiedActiveGatewaySkipsCleanupAndConfigValidation(t *testin
 	waitForStatusOutput(t, "seamless-cors status: running")
 
 	configDir := filepath.Join(home, ".seamless-cors")
-	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("log-level: nope\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("domain-list: \"\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	secondAdapter := &fakeAdapter{}
@@ -593,11 +591,9 @@ func TestRuntimeLiveConfigPreservesDomainListOverride(t *testing.T) {
 
 	changed := config.Default()
 	changed.DomainList = configDomainPath
-	changed.LogLevel = "debug"
 	changed.SourcePath = configPath
 	changed.CATrusted = true
 	writeConfigForRuntime(t, configPath, changed)
-	waitForStatusOutput(t, "log-level: debug")
 	waitForStatusOutput(t, "pending lifecycle changes: ca-trusted")
 
 	if err := os.WriteFile(overrideDomainPath, []byte("override-two.example.test\n"), 0o600); err != nil {
@@ -644,13 +640,13 @@ func TestRuntimeStopsOnInvalidLiveConfig(t *testing.T) {
 	go func() { done <- runtime.Serve(ctx) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
 
-	if err := os.WriteFile(configPath, []byte("log-level: nope\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("domain-list: \"\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	select {
 	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "log-level") {
+		if err == nil || !strings.Contains(err.Error(), "domain-list") {
 			t.Fatalf("serve error = %v", err)
 		}
 	case <-time.After(2 * time.Second):
@@ -699,7 +695,6 @@ func TestStatusReportsPendingLifecycleChanges(t *testing.T) {
 func writeConfigForRuntime(t *testing.T, path string, cfg config.Config) {
 	t.Helper()
 	text := "domain-list: " + cfg.DomainList + "\n" +
-		"log-level: " + cfg.LogLevel + "\n" +
 		"ca-trusted: " + map[bool]string{true: "true", false: "false"}[cfg.CATrusted] + "\n"
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
