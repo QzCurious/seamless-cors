@@ -87,7 +87,7 @@ func LoadOrBootstrap(configPath string, overrides Overrides, stdout io.Writer) (
 		bootstrapped = true
 		if stdout != nil {
 			home, _ := HomeDir()
-			fmt.Fprintf(stdout, "Created:\n  %s\n  %s\n\nAdd at least one domain to domains.txt, then run:\n  seamless-cors start\n", configPath, filepath.Join(home, DefaultDomainListFileName))
+			fmt.Fprintf(stdout, "Created:\n  %s\n  %s\n\n", configPath, filepath.Join(home, DefaultDomainListFileName))
 		}
 	}
 

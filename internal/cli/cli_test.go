@@ -1,8 +1,13 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"strings"
 	"testing"
+
+	"seamless-cors/internal/config"
 )
 
 func TestParseOverridesSupportsCurrentFlags(t *testing.T) {
@@ -28,5 +33,23 @@ func TestParseOverridesRejectsUnknownFlags(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown flag") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunPrintsStartCommandErrors(t *testing.T) {
+	wantErr := errors.New("start failed")
+	var stderr bytes.Buffer
+
+	err := run([]string{"start"}, io.Discard, &stderr, commandHandlers{
+		start: func(io.Writer, io.Writer, config.Overrides) error {
+			return wantErr
+		},
+	})
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("run error = %v", err)
+	}
+	if got := stderr.String(); !strings.Contains(got, wantErr.Error()) {
+		t.Fatalf("stderr = %q", got)
 	}
 }

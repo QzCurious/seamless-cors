@@ -82,4 +82,7 @@ func TestLoadOrBootstrapCreatesCommentedDefaultsAndAppliesOverrides(t *testing.T
 	if !bytes.Contains(out.Bytes(), []byte("Created:")) {
 		t.Fatalf("bootstrap output = %q", out.String())
 	}
+	if bytes.Contains(out.Bytes(), []byte("Add at least one domain")) {
+		t.Fatalf("bootstrap output treated empty Domain List as invalid: %q", out.String())
+	}
 }

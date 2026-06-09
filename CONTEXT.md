@@ -177,7 +177,7 @@ A start-time flag for a current Explicit Configuration setting that overrides it
 _Avoid_: hidden config mutation, persistent flag change, obsolete flag handling
 
 **First-Start Bootstrap**:
-A startup behavior where missing default config and Domain List files are created automatically before validation continues.
+A startup behavior where missing default config and Domain List files are created automatically before validation continues, allowing the same start command to continue with an Empty Domain List when no active entries exist yet.
 _Avoid_: init command, manual file scaffolding
 
 **Commented Default Config**:
@@ -204,9 +204,17 @@ _Avoid_: implicit consent, persistent consent, surprise permission prompt, parti
 An Explicit Lifecycle Consent required when a gateway start would replace existing managed PAC state, showing current managed PAC state and explaining that Runtime Cleanup removes seamless-cors PAC settings without restoring previous PAC state.
 _Avoid_: silent proxy replacement, proxy chaining, broad proxy takeover
 
+**Independent PAC Lifecycle**:
+A lifecycle boundary where Managed PAC Consent and PAC Routing setup follow gateway start independently of whether the Domain List currently has active entries.
+_Avoid_: domain-gated PAC setup, delayed proxy ownership, route-count-based lifecycle
+
 **CA Trust Consent**:
 An Explicit Lifecycle Consent required on each gateway start with `ca-trusted: true` before adding Ephemeral User CA trust for HTTPS interception.
 _Avoid_: implicit CA trust, persistent CA consent, trust without prompt
+
+**Independent CA Lifecycle**:
+A lifecycle boundary where CA Trust Consent and Ephemeral User CA setup follow `ca-trusted` independently of whether the Domain List currently has active entries.
+_Avoid_: domain-gated CA trust, implicit CA delay, route-dependent trust setup
 
 **All-Service PAC Management**:
 A Managed System Proxy behavior where supported platform adapters apply PAC Routing to every network service they manage, so routing remains consistent when the active network changes during a gateway run.
@@ -264,9 +272,17 @@ _Avoid_: routing table, interception rules, proxy rules
 A full-line or inline note in the Domain List that is ignored during matching.
 _Avoid_: comment-as-entry
 
-**Active Domain Requirement**:
-A startup validation rule that requires at least one valid Domain List Entry before the gateway starts, even if current lifecycle settings make some entries non-repairable.
-_Avoid_: empty startup, no-op managed proxy
+**Empty Domain List**:
+A valid Domain List state with no active entries, including a file that contains only comments or blank lines; the gateway keeps managed PAC Routing installed and matches no upstreams until valid Domain List Entries are added.
+_Avoid_: startup failure for no active entries, proxy-all fallback
+
+**Invalid Domain Startup**:
+A startup validation behavior where a Domain List with invalid lines fails before the gateway starts, even when it has no valid entries.
+_Avoid_: silent invalid entry, invalid-as-empty, partial startup warning
+
+**Fatal Domain List Error**:
+A live configuration behavior where an invalid Domain List edit logs the line-level validation problem, performs Runtime Cleanup, and stops the gateway.
+_Avoid_: stale valid routing, partial valid routing, silent invalid entry
 
 **Domain List Entry**:
 A single line in the Domain List that may name a full origin or use hostname shorthand for easy DEV/QA configuration.
@@ -277,8 +293,8 @@ A Domain List Entry that names a host without scheme so it matches that host acr
 _Avoid_: default-port-only shorthand, scheme-specific shorthand
 
 **Line-Level Domain Validation**:
-A Domain List behavior where each line is validated independently so invalid entries can be reported without preventing valid entries from being served while the gateway is already running.
-_Avoid_: whole-file invalidation
+A Domain List behavior where each line is validated independently so invalid entries can be reported precisely; any invalid line makes the Domain List invalid for startup and live updates.
+_Avoid_: silent invalid entry, partial valid routing, invalid-as-empty
 
 **Exact Domain Match**:
 A Domain List matching rule where hostname shorthand matches only the named host unless the entry uses an explicit wildcard.
@@ -588,11 +604,11 @@ QA engineer: "Yes, Path Expansion applies to path fields only."
 
 Developer: "Can the gateway start with no domains?"
 
-QA engineer: "No, Active Domain Requirement prevents a no-op managed proxy startup."
+QA engineer: "Yes, Empty Domain List is valid, so the gateway runs while PAC Routing matches no upstreams until valid Domain List Entries are added."
 
 Developer: "Do I need to run an init command first?"
 
-QA engineer: "No, First-Start Bootstrap creates the default files when needed."
+QA engineer: "No, First-Start Bootstrap creates the default files when needed, and Empty Domain List lets that same start command keep running with no matched upstreams yet."
 
 Developer: "Will generated config explain the settings?"
 
@@ -612,7 +628,11 @@ QA engineer: "Yes, Hostname Shorthand matches the named host across schemes and 
 
 Developer: "What if one Domain List line is wrong?"
 
-QA engineer: "Line-Level Domain Validation reports the invalid line while valid entries keep working during a running session."
+QA engineer: "Line-Level Domain Validation reports the invalid line, and Invalid Domain Startup or a live validation stop prevents partial routing from a mixed-validity Domain List."
+
+Developer: "What if I save an invalid Domain List while the gateway is running?"
+
+QA engineer: "Fatal Domain List Error logs the line-level validation problem, performs Runtime Cleanup, and stops the gateway."
 
 Developer: "Does `api.dev.example.com` include its subdomains?"
 

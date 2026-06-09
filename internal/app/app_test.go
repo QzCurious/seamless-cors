@@ -193,6 +193,44 @@ func TestStartRunsCleanupBeforeInvalidConfig(t *testing.T) {
 	}
 }
 
+func TestStartAllowsEmptyDomainListAndInstallsManagedPAC(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".seamless-cors")
+	domainPath := filepath.Join(configDir, "domains.txt")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeConfigForRuntime(t, filepath.Join(configDir, "config.yaml"), config.Config{
+		DomainList: domainPath,
+		LogLevel:   "info",
+		CATrusted:  false,
+	})
+	if err := os.WriteFile(domainPath, []byte("# add domains when needed\n\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeAdapter{}
+	var out bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+
+	go func() {
+		done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), &out, config.Overrides{}, fake)
+	}()
+	waitForStatusOutput(t, "domains: 0")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if fake.installedPAC == "" {
+		t.Fatal("empty Domain List start did not install managed PAC")
+	}
+	if !strings.Contains(out.String(), "seamless-cors running") {
+		t.Fatalf("start output = %q", out.String())
+	}
+}
+
 func TestStartDeclinedLifecycleConsentDoesNotMutateOSOrRuntimeState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -419,7 +457,7 @@ func TestRuntimeReloadsDomainListIntoGeneratedPAC(t *testing.T) {
 	}
 }
 
-func TestRuntimeIgnoresInvalidLiveDomainList(t *testing.T) {
+func TestRuntimeStopsOnInvalidLiveDomainList(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	domainPath := filepath.Join(home, "domains.txt")
@@ -452,13 +490,58 @@ func TestRuntimeIgnoresInvalidLiveDomainList(t *testing.T) {
 	if err := os.WriteFile(domainPath, []byte("api-two.example.test\nhttps://*.bad.example.test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(250 * time.Millisecond)
-	body := fetchHTTPBody(t, pacURL)
-	if !strings.Contains(body, "api-one.example.test") {
-		t.Fatalf("invalid domain list replaced last good PAC body:\n%s", body)
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "Fatal Domain List Error") {
+			t.Fatalf("serve error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime did not stop after invalid live Domain List")
 	}
-	if strings.Contains(body, "api-two.example.test") {
-		t.Fatalf("invalid domain list was partially applied:\n%s", body)
+	cancel()
+}
+
+func TestRuntimeAppliesEmptyLiveDomainList(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	domainPath := filepath.Join(home, "domains.txt")
+	if err := os.WriteFile(domainPath, []byte("api-one.example.test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entries, errs, err := loadDomainList(domainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("domain errors = %v", errs)
+	}
+	cfg := config.Default()
+	cfg.DomainList = domainPath
+
+	runtime, err := NewRuntime(cfg, entries, &fakeAdapter{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runtime.Serve(ctx) }()
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
+
+	pacURL := "http://" + runtime.listeners[1].Addr().String() + "/seamless-cors.pac"
+	waitForHTTPBody(t, pacURL, "api-one.example.test")
+
+	if err := os.WriteFile(domainPath, []byte("# no active domains\n\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatusOutput(t, "domains: 0")
+	body := fetchHTTPBody(t, pacURL)
+	if strings.Contains(body, "api-one.example.test") {
+		t.Fatalf("empty Domain List kept stale PAC route:\n%s", body)
+	}
+	if !strings.Contains(body, "return 'DIRECT'") {
+		t.Fatalf("empty Domain List PAC should fall through to DIRECT:\n%s", body)
 	}
 
 	cancel()

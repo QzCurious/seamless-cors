@@ -18,6 +18,20 @@ const usage = `Usage:
 
 // Run dispatches the v1 Minimal Command Surface.
 func Run(args []string, stdout, stderr io.Writer) error {
+	return run(args, stdout, stderr, commandHandlers{
+		start:  app.Start,
+		stop:   app.Stop,
+		status: app.Status,
+	})
+}
+
+type commandHandlers struct {
+	start  func(io.Writer, io.Writer, config.Overrides) error
+	stop   func(io.Writer, io.Writer) error
+	status func(io.Writer, io.Writer) error
+}
+
+func run(args []string, stdout, stderr io.Writer, commands commandHandlers) error {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return fmt.Errorf("missing command")
@@ -30,17 +44,24 @@ func Run(args []string, stdout, stderr io.Writer) error {
 			fmt.Fprintln(stderr, err)
 			return err
 		}
-		return app.Start(stdout, stderr, overrides)
+		return reportCommandError(stderr, commands.start(stdout, stderr, overrides))
 	case "stop":
-		return app.Stop(stdout, stderr)
+		return reportCommandError(stderr, commands.stop(stdout, stderr))
 	case "status":
-		return app.Status(stdout, stderr)
+		return reportCommandError(stderr, commands.status(stdout, stderr))
 	default:
 		err := fmt.Errorf("unknown command: %s", args[0])
 		fmt.Fprintln(stderr, err)
 		fmt.Fprint(stderr, usage)
 		return err
 	}
+}
+
+func reportCommandError(stderr io.Writer, err error) error {
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+	}
+	return err
 }
 
 func parseOverrides(args []string) (config.Overrides, error) {

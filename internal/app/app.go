@@ -60,9 +60,6 @@ func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Wr
 	if len(errs) > 0 {
 		return fmt.Errorf("invalid Domain List:\n%s", formatDomainErrors(errs))
 	}
-	if len(entries) == 0 {
-		return fmt.Errorf("Domain List has no active entries; add at least one domain to %s", loaded.DomainPath)
-	}
 	pacStates, err := adapter.CurrentPACState()
 	if err != nil {
 		return err
@@ -178,9 +175,6 @@ func NewRuntime(cfg config.Config, entries []domain.Entry, adapter platform.Adap
 	if err := config.Validate(cfg); err != nil {
 		return nil, err
 	}
-	if len(entries) == 0 {
-		return nil, fmt.Errorf("Domain List has no active entries")
-	}
 	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("proxy listener unavailable: %w", err)
@@ -283,7 +277,7 @@ func (r *Runtime) Serve(ctx context.Context) error {
 		fmt.Fprintln(r.stdout, "Local CA certificate added to the system trust settings.")
 	}
 
-	go r.watchLiveDomainList(ctx)
+	go r.watchLiveDomainList(ctx, errs)
 	go r.watchLiveConfig(ctx, errs)
 	go func() { errs <- r.proxy.Serve(r.listeners[0]) }()
 	go func() { errs <- r.pac.Serve(r.listeners[1]) }()
@@ -396,7 +390,7 @@ func (r *Runtime) writeRuntimeState(state control.RuntimeState) error {
 	return control.WriteRuntimeState(r.statePath, state)
 }
 
-func (r *Runtime) watchLiveDomainList(ctx context.Context) {
+func (r *Runtime) watchLiveDomainList(ctx context.Context, errs chan<- error) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	var last string
@@ -420,9 +414,12 @@ func (r *Runtime) watchLiveDomainList(ctx context.Context) {
 				continue
 			}
 			entries, parseErrs := domain.ParseList(text)
-			if len(parseErrs) > 0 || len(entries) == 0 {
-				last = text
-				continue
+			if len(parseErrs) > 0 {
+				select {
+				case errs <- fmt.Errorf("Fatal Domain List Error: invalid Domain List:\n%s", formatDomainErrors(parseErrs)):
+				case <-ctx.Done():
+				}
+				return
 			}
 			r.applyEntries(entries)
 			last = text
