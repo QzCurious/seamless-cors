@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"seamless-cors/internal/ca"
+	"seamless-cors/internal/cleanup"
 	"seamless-cors/internal/config"
 	"seamless-cors/internal/control"
 	"seamless-cors/internal/domain"
@@ -46,7 +47,7 @@ func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Wr
 		fmt.Fprintln(stdout, "seamless-cors is already running")
 		return nil
 	}
-	if err := RuntimeCleanup(stdout, adapter); err != nil {
+	if err := cleanRuntime(adapter); err != nil {
 		return err
 	}
 	loaded, err := config.LoadOrBootstrap("", overrides, stdout)
@@ -300,14 +301,14 @@ func (r *Runtime) Close() error {
 	_ = r.proxy.Close()
 	_ = r.pac.Close()
 	_ = r.control.Close(ctx)
-	return RuntimeCleanup(r.stdout, r.adapter)
+	return cleanup.Clean(r.runtimeDir, r.adapter)
 }
 
 func Stop(stdout, _ io.Writer) error {
 	state, err := readRuntimeState()
 	if err != nil {
 		fmt.Fprintln(stdout, "seamless-cors stop requested; no running seamless-cors found")
-		return RuntimeCleanup(stdout, platform.CurrentAdapter)
+		return cleanRuntime(platform.CurrentAdapter)
 	}
 	stopped, err := control.CallStop("http://"+state.ControlListen, state.Token, stdout)
 	if err != nil {
@@ -316,7 +317,7 @@ func Stop(stdout, _ io.Writer) error {
 	if stopped {
 		waitForRuntimeToStop(state)
 	}
-	return RuntimeCleanup(stdout, platform.CurrentAdapter)
+	return cleanRuntime(platform.CurrentAdapter)
 }
 
 func Status(stdout, _ io.Writer) error {
@@ -368,7 +369,7 @@ func (r *Runtime) ensureSingleInstance() error {
 	if runtimeStateIsActive(state) {
 		return fmt.Errorf("seamless-cors is already running")
 	}
-	return RuntimeCleanup(r.stdout, r.adapter)
+	return cleanup.Clean(r.runtimeDir, r.adapter)
 }
 
 func (r *Runtime) writeRuntimeState(state control.RuntimeState) error {
@@ -384,7 +385,7 @@ func (r *Runtime) writeRuntimeState(state control.RuntimeState) error {
 	if runtimeStateIsActive(existing) {
 		return fmt.Errorf("seamless-cors is already running")
 	}
-	if err := RuntimeCleanup(r.stdout, r.adapter); err != nil {
+	if err := cleanup.Clean(r.runtimeDir, r.adapter); err != nil {
 		return err
 	}
 	return control.WriteRuntimeState(r.statePath, state)
@@ -531,40 +532,12 @@ func randomToken() (string, error) {
 	return hex.EncodeToString(bytes[:]), nil
 }
 
-func RuntimeCleanup(stdout io.Writer, adapter platform.Adapter) error {
+func cleanRuntime(adapter cleanup.Adapter) error {
 	runtimeDir, err := config.RuntimeDir()
 	if err != nil {
 		return err
 	}
-	var errs []error
-	if err := adapter.ClearOwnedPAC(); err != nil {
-		errs = append(errs, fmt.Errorf("managed PAC cleanup failed: %w", err))
-	}
-	if err := adapter.CleanupCAFootprint(); err != nil {
-		errs = append(errs, fmt.Errorf("CA trust cleanup failed: %w", err))
-	}
-	for _, name := range []string{"ephemeral-ca.pem", "ephemeral-ca-key.pem", "control-state.json"} {
-		err := os.Remove(filepath.Join(runtimeDir, name))
-		if err != nil && !os.IsNotExist(err) {
-			errs = append(errs, fmt.Errorf("runtime file cleanup failed for %s: %w", name, err))
-		}
-	}
-	if len(errs) > 0 {
-		return cleanupError{errs: errs}
-	}
-	return nil
-}
-
-type cleanupError struct {
-	errs []error
-}
-
-func (e cleanupError) Error() string {
-	var parts []string
-	for _, err := range e.errs {
-		parts = append(parts, err.Error())
-	}
-	return strings.Join(parts, "; ") + "\nCleanup failed; resolve the OS or permission problem, then run `seamless-cors stop` again."
+	return cleanup.Clean(runtimeDir, adapter)
 }
 
 func activeRuntimeState() (bool, error) {
@@ -586,29 +559,13 @@ func waitForRuntimeToStop(state control.RuntimeState) {
 }
 
 func reportCleanupNeeded(stdout io.Writer, adapter platform.Adapter, staleState bool) {
-	needed := staleState || runtimeFilesNeedCleanup()
-	if states, err := adapter.CurrentPACState(); err == nil && platform.HasOwnedPACState(states) {
-		needed = true
-	}
-	if hasCA, err := adapter.HasCAFootprint(); err == nil && hasCA {
-		needed = true
-	}
-	if needed {
-		fmt.Fprintln(stdout, "cleanup-needed: run `seamless-cors stop` to clean seamless-cors-owned runtime state")
-	}
-}
-
-func runtimeFilesNeedCleanup() bool {
 	runtimeDir, err := config.RuntimeDir()
 	if err != nil {
-		return false
+		return
 	}
-	for _, name := range []string{"ephemeral-ca.pem", "ephemeral-ca-key.pem", "control-state.json"} {
-		if _, err := os.Stat(filepath.Join(runtimeDir, name)); err == nil {
-			return true
-		}
+	if cleanup.Inspect(runtimeDir, adapter, staleState).Needed() {
+		fmt.Fprintln(stdout, "cleanup-needed: run `seamless-cors stop` to clean seamless-cors-owned runtime state")
 	}
-	return false
 }
 
 func runtimeStateIsActive(state control.RuntimeState) bool {
