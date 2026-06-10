@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"seamless-cors/internal/ca"
 	"seamless-cors/internal/cors"
@@ -172,8 +173,7 @@ func (c *Core) serveInterceptedHTTPS(conn net.Conn, upstreamHost string) {
 			cors.WriteGatewayError(rawResponseWriter{conn: conn, headers: http.Header{}}, req, http.StatusBadGateway, "upstream", err)
 			return
 		}
-		cors.RepairResponseHeaders(resp.Header, req.Header.Get("Origin"))
-		_ = resp.Write(conn)
+		_ = writeDownstreamHTTP1Response(conn, req, resp)
 		_ = resp.Body.Close()
 		if !shouldKeepAlive(req, resp) {
 			return
@@ -238,6 +238,43 @@ func shouldKeepAlive(req *http.Request, resp *http.Response) bool {
 		return !req.Close
 	}
 	return !req.Close && !resp.Close
+}
+
+func writeDownstreamHTTP1Response(w io.Writer, req *http.Request, resp *http.Response) error {
+	downstream := *resp
+	downstream.Proto = "HTTP/1.1"
+	downstream.ProtoMajor = 1
+	downstream.ProtoMinor = 1
+	downstream.Header = resp.Header.Clone()
+	downstream.TransferEncoding = nil
+	if downstream.ContentLength < 0 {
+		downstream.TransferEncoding = []string{"chunked"}
+	}
+	cors.RepairResponseHeaders(downstream.Header, req.Header.Get("Origin"))
+	removeHopByHopHeaders(downstream.Header)
+	return downstream.Write(w)
+}
+
+func removeHopByHopHeaders(header http.Header) {
+	for _, name := range header["Connection"] {
+		for _, token := range strings.Split(name, ",") {
+			if token = strings.TrimSpace(token); token != "" {
+				header.Del(token)
+			}
+		}
+	}
+	for _, name := range []string{
+		"Connection",
+		"Keep-Alive",
+		"Proxy-Authenticate",
+		"Proxy-Authorization",
+		"TE",
+		"Trailer",
+		"Transfer-Encoding",
+		"Upgrade",
+	} {
+		header.Del(name)
+	}
 }
 
 func tunnel(dst io.WriteCloser, src io.ReadCloser) {

@@ -261,6 +261,61 @@ func TestTrustedHTTPSInterceptionAnswersPreflightLocally(t *testing.T) {
 	}
 }
 
+func TestTrustedHTTPSInterceptionSerializesHTTP2UpstreamAsHTTP1Response(t *testing.T) {
+	authority, err := ca.Create(t.TempDir(), platform.NoopAdapter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	core := New(Options{
+		CATrusted: true,
+		Authority: authority,
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Status:        "200 OK",
+				Proto:         "HTTP/2.0",
+				ProtoMajor:    2,
+				ProtoMinor:    0,
+				Header:        http.Header{"X-Upstream": []string{"h2"}},
+				Body:          io.NopCloser(strings.NewReader("secure upstream body")),
+				ContentLength: -1,
+				Request:       req,
+			}, nil
+		}),
+	})
+	proxyServer := httptest.NewServer(core)
+	defer proxyServer.Close()
+
+	tlsConn, reqHost := openTrustedTunnel(t, proxyServer.URL, "https://api.example.test", authority)
+	defer tlsConn.Close()
+
+	req, err := http.NewRequest(http.MethodGet, "https://"+reqHost+"/secure", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", "https://app.local")
+	req.Host = reqHost
+	if err := req.Write(tlsConn); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tlsConn), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.Proto != "HTTP/1.1" {
+		t.Fatalf("downstream proto = %q", resp.Proto)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "secure upstream body" {
+		t.Fatalf("body = %q", string(body))
+	}
+}
+
 func openTrustedTunnel(t *testing.T, proxyURL, upstreamURL string, authority *ca.EphemeralAuthority) (*tls.Conn, string) {
 	t.Helper()
 	proxyAddress := strings.TrimPrefix(proxyURL, "http://")
@@ -297,4 +352,10 @@ func openTrustedTunnel(t *testing.T, proxyURL, upstreamURL string, authority *ca
 		t.Fatal(err)
 	}
 	return tlsConn, upstreamAddress
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
