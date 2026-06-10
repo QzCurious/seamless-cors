@@ -36,34 +36,6 @@ _Avoid_: hand-built JavaScript rules, duplicated Domain List parsing, PAC-owned 
 A local HTTP endpoint served by the gateway that returns the current Generated PAC.
 _Avoid_: file PAC, static PAC file
 
-**Default Upstream Negotiation**:
-A gateway transport behavior where upstream HTTP protocol selection uses the Go runtime's normal negotiation instead of forcing a specific upstream protocol.
-_Avoid_: forced HTTP/1.1 upstream, guaranteed HTTP/2 feature
-
-**Explicit Gateway Error**:
-A gateway-generated failure response that clearly identifies seamless-cors as the source and explains the upstream or lifecycle problem.
-_Avoid_: disguised upstream error, silent failure
-
-**CORS-Readable Gateway Error**:
-An Explicit Gateway Error that includes the Reflective DEV/QA Policy headers when the original request reaching the Proxy Listener is Origin-gated.
-_Avoid_: hidden gateway error, browser-masked failure
-
-**JSON Gateway Error**:
-An Explicit Gateway Error encoded as JSON for frontend API debugging.
-_Avoid_: HTML error page, plain-text API error
-
-**Gateway Error Status Mapping**:
-The HTTP status convention where upstream failures use `502`, upstream timeouts use `504`, and gateway internal failures use `500`.
-_Avoid_: all-500 errors, disguised upstream status
-
-**No Request Timeout**:
-A gateway behavior where requests are not failed by a gateway-imposed application timeout; only transport and idle cleanup timeouts apply.
-_Avoid_: gateway request deadline, forced API timeout
-
-**Client Abort Propagation**:
-A gateway behavior where client-side request cancellation closes or cancels the corresponding upstream work.
-_Avoid_: orphaned upstream request, ignored client disconnect
-
 **Gateway Distribution**:
 The installable form of seamless-cors for a specific operating system and CPU architecture.
 _Avoid_: cross-platform binary
@@ -129,12 +101,8 @@ A local proxy endpoint where traffic that reaches it is eligible for CORS repair
 _Avoid_: manual proxy endpoint, browser setup address, generic listen, gatewayListen
 
 **CORS Proxy**:
-The gateway module behind the Proxy Listener that owns CORS repair, Local Preflight Answer, Response Repair, Explicit Gateway Error responses, and Trusted HTTPS Interception behavior for traffic that reaches it.
+The gateway module behind the Proxy Listener that owns CORS repair, Local Preflight Answer, Response Repair, and Trusted HTTPS Interception behavior for traffic that reaches it.
 _Avoid_: Domain List admission module, PAC Routing module, generic proxy
-
-**Diagnostic Proxy Listener Use**:
-An allowed troubleshooting behavior where a local user may point a browser or tool directly at the Proxy Listener, while normal Start Guidance still presents PAC Routing as the managed setup path.
-_Avoid_: supported manual setup path, listener-first start output, domain-list admission fallback
 
 **Explicit Configuration**:
 The complete user-editable gateway configuration, including live request policy and lifecycle settings but excluding runtime-selected listener addresses.
@@ -426,37 +394,13 @@ Developer: "What if I decline the Managed PAC Consent prompt?"
 
 QA engineer: "Start stops without changing machine proxy settings because there is no manual proxy fallback."
 
-Developer: "Does the gateway force HTTP/1.1 upstream?"
-
-QA engineer: "No, Default Upstream Negotiation lets Go select the upstream protocol normally."
-
-Developer: "What if upstream TLS verification fails?"
-
-QA engineer: "Explicit Gateway Error makes clear the failure came from the gateway while preserving the upstream TLS problem."
-
-Developer: "Will frontend code be able to read gateway errors?"
-
-QA engineer: "CORS-Readable Gateway Error makes Origin-gated gateway failures visible to the browser client when they reach the Proxy Listener."
-
-Developer: "What format do gateway errors use?"
-
-QA engineer: "JSON Gateway Error keeps failures easy to inspect from frontend API clients."
-
-Developer: "How are gateway failures status-coded?"
-
-QA engineer: "Gateway Error Status Mapping uses `502` for upstream failures, `504` for upstream timeouts, and `500` for gateway failures."
-
-Developer: "Will the gateway impose its own API request timeout?"
-
-QA engineer: "No, No Request Timeout avoids adding an application deadline, while Client Abort Propagation cleans up when the browser cancels."
-
 Developer: "Will the gateway configure Firefox or browser profile certificate stores?"
 
 QA engineer: "No, OS Trust Only keeps certificate trust limited to the current user's operating-system trust store."
 
 Developer: "What happens when `ca-trusted` is false?"
 
-QA engineer: "Trusted HTTPS Interception is disabled, so HTTPS traffic that reaches the Proxy Listener is tunneled without CORS repair."
+QA engineer: "Trust-Aware PAC Routing does not send matched HTTPS traffic to the Proxy Listener without Trusted HTTPS Interception."
 
 Developer: "Will the first run automatically trust a CA?"
 

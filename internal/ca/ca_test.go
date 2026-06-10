@@ -44,3 +44,27 @@ func TestEphemeralAuthorityCreatesAndTrustsCA(t *testing.T) {
 		}
 	}
 }
+
+func TestEphemeralAuthorityExposesTLSCertificate(t *testing.T) {
+	authority, err := Create(t.TempDir(), &fakeTrustStore{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cert, err := authority.TLSCertificate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cert.Certificate) == 0 {
+		t.Fatal("missing certificate chain")
+	}
+	if cert.PrivateKey == nil {
+		t.Fatal("missing private key")
+	}
+	if cert.Leaf == nil {
+		t.Fatal("missing parsed leaf")
+	}
+	if !cert.Leaf.IsCA {
+		t.Fatal("leaf is not a CA certificate")
+	}
+}

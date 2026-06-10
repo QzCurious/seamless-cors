@@ -148,7 +148,6 @@ type Runtime struct {
 	adapter          platform.Adapter
 	stdout           io.Writer
 	authority        *ca.EphemeralAuthority
-	proxyCore        *corsproxy.Core
 	proxy            *http.Server
 	pacHandler       *pacrouting.DynamicHandler
 	pac              *http.Server
@@ -218,7 +217,6 @@ func NewRuntimeFromLiveConfig(source *liveconfig.Source, snapshot liveconfig.Sna
 	pacListen := pacListener.Addr().String()
 	controlListen := controlListener.Addr().String()
 
-	proxyCore := corsproxy.New(corsproxy.Options{CATrusted: cfg.CATrusted})
 	pacBody := pacrouting.Generate(pacrouting.Options{ProxyListen: proxyListen, CATrusted: cfg.CATrusted, Entries: entries})
 	pacHandler := pacrouting.NewDynamicHandler(pacBody)
 	controlServer := control.New(control.State{
@@ -235,9 +233,8 @@ func NewRuntimeFromLiveConfig(source *liveconfig.Source, snapshot liveconfig.Sna
 		adapter:    adapter,
 		stdout:     stdout,
 		liveConfig: source,
-		proxyCore:  proxyCore,
 		pacHandler: pacHandler,
-		proxy:      &http.Server{Handler: proxyCore},
+		proxy:      &http.Server{},
 		pac:        &http.Server{Handler: pacHandler},
 		control:    controlServer,
 		listeners:  []net.Listener{proxyListener, pacListener, controlListener},
@@ -267,9 +264,17 @@ func (r *Runtime) Serve(ctx context.Context) error {
 			return err
 		}
 		r.authority = authority
-		r.proxyCore.SetAuthority(authority)
 		fmt.Fprintln(r.stdout, "Local CA certificate added to the current user's SSL trust settings.")
 	}
+	proxyHandler, err := corsproxy.New(corsproxy.Options{
+		CATrusted: r.cfg.CATrusted,
+		Authority: r.authority,
+	})
+	if err != nil {
+		r.Close()
+		return err
+	}
+	r.proxy.Handler = proxyHandler
 
 	errs := make(chan error, 4)
 	go func() { errs <- r.control.Serve(r.listeners[2]) }()

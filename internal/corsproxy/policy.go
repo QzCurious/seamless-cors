@@ -1,7 +1,6 @@
-package cors
+package corsproxy
 
 import (
-	"encoding/json"
 	"net/http"
 	"sort"
 	"strings"
@@ -17,63 +16,48 @@ var corsHeaderNames = map[string]struct{}{
 	"Access-Control-Allow-Private-Network": {},
 }
 
-func IsPreflight(req *http.Request) bool {
+func isPreflight(req *http.Request) bool {
 	return req.Method == http.MethodOptions &&
 		req.Header.Get("Origin") != "" &&
 		req.Header.Get("Access-Control-Request-Method") != ""
 }
 
-func WritePreflight(w http.ResponseWriter, req *http.Request) {
-	h := w.Header()
-	ApplyReflectivePolicy(h, req.Header.Get("Origin"))
-	h.Set("Access-Control-Allow-Methods", req.Header.Get("Access-Control-Request-Method"))
+func preflightResponse(req *http.Request) *http.Response {
+	headers := http.Header{}
+	applyReflectivePolicy(headers, req.Header.Get("Origin"))
+	headers.Set("Access-Control-Allow-Methods", req.Header.Get("Access-Control-Request-Method"))
 	if requestedHeaders := req.Header.Get("Access-Control-Request-Headers"); requestedHeaders != "" {
-		h.Set("Access-Control-Allow-Headers", requestedHeaders)
+		headers.Set("Access-Control-Allow-Headers", requestedHeaders)
 	}
 	if req.Header.Get("Access-Control-Request-Private-Network") == "true" {
-		h.Set("Access-Control-Allow-Private-Network", "true")
+		headers.Set("Access-Control-Allow-Private-Network", "true")
 	}
-	h.Set("Access-Control-Max-Age", "600")
-	w.WriteHeader(http.StatusNoContent)
+	headers.Set("Access-Control-Max-Age", "600")
+	return &http.Response{
+		StatusCode:    http.StatusNoContent,
+		Status:        http.StatusText(http.StatusNoContent),
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        headers,
+		Body:          http.NoBody,
+		ContentLength: 0,
+		Request:       req,
+	}
 }
 
-func RepairResponseHeaders(headers http.Header, origin string) {
+func repairResponseHeaders(headers http.Header, origin string) {
 	if origin == "" {
 		return
 	}
 	for name := range corsHeaderNames {
 		headers.Del(name)
 	}
-	ApplyReflectivePolicy(headers, origin)
+	applyReflectivePolicy(headers, origin)
 	headers.Set("Access-Control-Expose-Headers", concreteExposeHeaders(headers))
 }
 
-type GatewayError struct {
-	Source  string `json:"source"`
-	Type    string `json:"type"`
-	Message string `json:"message"`
-}
-
-func WriteGatewayError(w http.ResponseWriter, req *http.Request, status int, typ string, err error) {
-	h := w.Header()
-	h.Set("Content-Type", "application/json")
-	if req.Header.Get("Origin") != "" {
-		ApplyReflectivePolicy(h, req.Header.Get("Origin"))
-		h.Set("Access-Control-Expose-Headers", "Content-Type")
-	}
-	w.WriteHeader(status)
-	msg := ""
-	if err != nil {
-		msg = err.Error()
-	}
-	_ = json.NewEncoder(w).Encode(GatewayError{
-		Source:  "seamless-cors",
-		Type:    typ,
-		Message: msg,
-	})
-}
-
-func ApplyReflectivePolicy(headers http.Header, origin string) {
+func applyReflectivePolicy(headers http.Header, origin string) {
 	if origin == "" {
 		return
 	}

@@ -8,10 +8,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
-	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"seamless-cors/internal/platform"
@@ -70,30 +68,14 @@ func Create(dir string, adapter platform.Adapter) (*EphemeralAuthority, error) {
 	}, nil
 }
 
-func (a *EphemeralAuthority) LeafCertificate(host string) (tls.Certificate, error) {
-	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+func (a *EphemeralAuthority) TLSCertificate() (tls.Certificate, error) {
+	cert, err := tls.X509KeyPair(a.CertPEM, a.KeyPEM)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	host = strings.TrimSuffix(host, ".")
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject:      pkix.Name{CommonName: host},
-		NotBefore:    time.Now().Add(-time.Minute),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		template.IPAddresses = []net.IP{ip}
-	} else {
-		template.DNSNames = []string{host}
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, a.cert, &leafKey.PublicKey, a.key)
+	cert.Leaf, err = x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(leafKey)})
-	return tls.X509KeyPair(certPEM, keyPEM)
+	return cert, nil
 }

@@ -1,284 +1,128 @@
 package corsproxy
 
 import (
-	"bufio"
-	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
-	"net"
+	"log"
 	"net/http"
-	"net/url"
+	"os"
 	"strings"
+	"sync"
+
+	"github.com/elazarl/goproxy"
 
 	"seamless-cors/internal/ca"
-	"seamless-cors/internal/cors"
 )
 
 type Options struct {
 	CATrusted bool
 	Authority *ca.EphemeralAuthority
-	Transport http.RoundTripper
+	Transport *http.Transport
 }
 
 type Core struct {
-	caTrusted bool
-	authority *ca.EphemeralAuthority
-	transport http.RoundTripper
+	proxy *goproxy.ProxyHttpServer
 }
 
-func New(opts Options) *Core {
-	transport := opts.Transport
-	if transport == nil {
-		transport = http.DefaultTransport
+func New(opts Options) (*Core, error) {
+	proxy := goproxy.NewProxyHttpServer()
+	configureProxyLogging(proxy)
+	proxy.Tr = opts.Transport
+	if proxy.Tr == nil {
+		proxy.Tr = defaultTransport()
 	}
-	return &Core{caTrusted: opts.CATrusted, authority: opts.Authority, transport: transport}
+	proxy.CertStore = newMemoryCertStore()
+
+	if opts.CATrusted {
+		if opts.Authority == nil {
+			return nil, fmt.Errorf("trusted HTTPS interception requires an ephemeral CA")
+		}
+		cert, err := opts.Authority.TLSCertificate()
+		if err != nil {
+			return nil, err
+		}
+		proxy.OnRequest().HandleConnectFunc(func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+			return &goproxy.ConnectAction{
+				Action:    goproxy.ConnectMitm,
+				TLSConfig: goproxy.TLSConfigFromCA(&cert),
+			}, host
+		})
+	}
+
+	proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		if !isPreflight(req) {
+			return req, nil
+		}
+		ctx.UserData = localPreflight{}
+		return nil, preflightResponse(req)
+	})
+	proxy.OnResponse().DoFunc(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
+		if resp == nil {
+			return nil
+		}
+		if _, ok := ctx.UserData.(localPreflight); ok {
+			return resp
+		}
+		if ctx.Req != nil {
+			repairResponseHeaders(resp.Header, ctx.Req.Header.Get("Origin"))
+		}
+		return resp
+	})
+
+	return &Core{proxy: proxy}, nil
 }
 
-func (c *Core) SetAuthority(authority *ca.EphemeralAuthority) {
-	c.authority = authority
+func configureProxyLogging(proxy *goproxy.ProxyHttpServer) {
+	if proxyDebugEnabled() {
+		proxy.Verbose = true
+		return
+	}
+	proxy.Verbose = false
+	proxy.Logger = log.New(io.Discard, "", 0)
+}
+
+func proxyDebugEnabled() bool {
+	switch strings.ToLower(os.Getenv("SEAMLESS_CORS_DEBUG_PROXY")) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Core) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if req.Method == http.MethodConnect {
-		c.handleConnect(w, req)
-		return
-	}
-	target := absoluteURL(req)
-	if target == nil {
-		cors.WriteGatewayError(w, req, http.StatusBadGateway, "upstream", fmt.Errorf("request target is not an absolute URL"))
-		return
-	}
-	if cors.IsPreflight(req) {
-		cors.WritePreflight(w, req)
-		return
-	}
-	c.forward(w, req, target)
+	c.proxy.ServeHTTP(w, req)
 }
 
-func (c *Core) forward(w http.ResponseWriter, req *http.Request, target *url.URL) {
-	out := req.Clone(req.Context())
-	out.URL = target
-	out.RequestURI = ""
-	out.Host = target.Host
-	out.Header = req.Header.Clone()
+func defaultTransport() *http.Transport {
+	if transport, ok := http.DefaultTransport.(*http.Transport); ok {
+		return transport.Clone()
+	}
+	return &http.Transport{}
+}
 
-	resp, err := c.transport.RoundTrip(out)
+type localPreflight struct{}
+
+type memoryCertStore struct {
+	mu    sync.Mutex
+	certs map[string]*tls.Certificate
+}
+
+func newMemoryCertStore() *memoryCertStore {
+	return &memoryCertStore{certs: map[string]*tls.Certificate{}}
+}
+
+func (s *memoryCertStore) Fetch(hostname string, gen func() (*tls.Certificate, error)) (*tls.Certificate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cert, ok := s.certs[hostname]; ok {
+		return cert, nil
+	}
+	cert, err := gen()
 	if err != nil {
-		status := http.StatusBadGateway
-		if req.Context().Err() == context.Canceled {
-			return
-		}
-		cors.WriteGatewayError(w, req, status, "upstream", err)
-		return
+		return nil, err
 	}
-	defer resp.Body.Close()
-
-	for name, values := range resp.Header {
-		for _, value := range values {
-			w.Header().Add(name, value)
-		}
-	}
-	cors.RepairResponseHeaders(w.Header(), req.Header.Get("Origin"))
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
-}
-
-func (c *Core) handleConnect(w http.ResponseWriter, req *http.Request) {
-	if c.caTrusted {
-		c.handleTrustedHTTPS(w, req)
-		return
-	}
-	dst, err := net.Dial("tcp", req.Host)
-	if err != nil {
-		cors.WriteGatewayError(w, req, http.StatusBadGateway, "upstream", err)
-		return
-	}
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		_ = dst.Close()
-		cors.WriteGatewayError(w, req, http.StatusInternalServerError, "gateway", fmt.Errorf("response writer cannot tunnel"))
-		return
-	}
-	client, _, err := hj.Hijack()
-	if err != nil {
-		_ = dst.Close()
-		return
-	}
-	_, _ = client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-	go tunnel(dst, client)
-	go tunnel(client, dst)
-}
-
-func (c *Core) handleTrustedHTTPS(w http.ResponseWriter, req *http.Request) {
-	if c.authority == nil {
-		cors.WriteGatewayError(w, req, http.StatusInternalServerError, "https-interception", fmt.Errorf("ephemeral CA is not available"))
-		return
-	}
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		cors.WriteGatewayError(w, req, http.StatusInternalServerError, "gateway", fmt.Errorf("response writer cannot intercept HTTPS"))
-		return
-	}
-	client, _, err := hj.Hijack()
-	if err != nil {
-		return
-	}
-	host, _, err := net.SplitHostPort(req.Host)
-	if err != nil {
-		host = req.Host
-	}
-	leaf, err := c.authority.LeafCertificate(host)
-	if err != nil {
-		_ = client.Close()
-		return
-	}
-	if _, err := client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
-		_ = client.Close()
-		return
-	}
-	tlsClient := tls.Server(client, &tls.Config{Certificates: []tls.Certificate{leaf}})
-	if err := tlsClient.Handshake(); err != nil {
-		_ = tlsClient.Close()
-		return
-	}
-	go c.serveInterceptedHTTPS(tlsClient, req.Host)
-}
-
-func (c *Core) serveInterceptedHTTPS(conn net.Conn, upstreamHost string) {
-	defer conn.Close()
-	reader := bufio.NewReader(conn)
-	for {
-		req, err := http.ReadRequest(reader)
-		if err != nil {
-			return
-		}
-		target := *req.URL
-		target.Scheme = "https"
-		target.Host = upstreamHost
-		req.URL = &target
-		req.Host = upstreamHost
-		req.RequestURI = ""
-
-		if cors.IsPreflight(req) {
-			cors.WritePreflight(rawResponseWriter{conn: conn, headers: http.Header{}}, req)
-			if !shouldKeepAlive(req, nil) {
-				return
-			}
-			continue
-		}
-
-		resp, err := c.transport.RoundTrip(req)
-		if err != nil {
-			cors.WriteGatewayError(rawResponseWriter{conn: conn, headers: http.Header{}}, req, http.StatusBadGateway, "upstream", err)
-			return
-		}
-		_ = writeDownstreamHTTP1Response(conn, req, resp)
-		_ = resp.Body.Close()
-		if !shouldKeepAlive(req, resp) {
-			return
-		}
-	}
-}
-
-type rawResponseWriter struct {
-	conn    net.Conn
-	headers http.Header
-	status  int
-}
-
-func (w rawResponseWriter) Header() http.Header {
-	return w.headers
-}
-
-func (w rawResponseWriter) WriteHeader(status int) {
-	w.status = status
-	statusText := http.StatusText(status)
-	if statusText == "" {
-		statusText = "status"
-	}
-	_, _ = fmt.Fprintf(w.conn, "HTTP/1.1 %d %s\r\n", status, statusText)
-	for name, values := range w.headers {
-		for _, value := range values {
-			_, _ = fmt.Fprintf(w.conn, "%s: %s\r\n", name, value)
-		}
-	}
-	_, _ = io.WriteString(w.conn, "\r\n")
-}
-
-func (w rawResponseWriter) Write(body []byte) (int, error) {
-	if w.status == 0 {
-		w.WriteHeader(http.StatusOK)
-	}
-	return w.conn.Write(body)
-}
-
-func absoluteURL(req *http.Request) *url.URL {
-	if req.URL == nil {
-		return nil
-	}
-	if req.URL.IsAbs() {
-		return req.URL
-	}
-	if req.Host == "" {
-		return nil
-	}
-	scheme := "http"
-	if req.TLS != nil {
-		scheme = "https"
-	}
-	copy := *req.URL
-	copy.Scheme = scheme
-	copy.Host = req.Host
-	return &copy
-}
-
-func shouldKeepAlive(req *http.Request, resp *http.Response) bool {
-	if resp == nil {
-		return !req.Close
-	}
-	return !req.Close && !resp.Close
-}
-
-func writeDownstreamHTTP1Response(w io.Writer, req *http.Request, resp *http.Response) error {
-	downstream := *resp
-	downstream.Proto = "HTTP/1.1"
-	downstream.ProtoMajor = 1
-	downstream.ProtoMinor = 1
-	downstream.Header = resp.Header.Clone()
-	downstream.TransferEncoding = nil
-	if downstream.ContentLength < 0 {
-		downstream.TransferEncoding = []string{"chunked"}
-	}
-	cors.RepairResponseHeaders(downstream.Header, req.Header.Get("Origin"))
-	removeHopByHopHeaders(downstream.Header)
-	return downstream.Write(w)
-}
-
-func removeHopByHopHeaders(header http.Header) {
-	for _, name := range header["Connection"] {
-		for _, token := range strings.Split(name, ",") {
-			if token = strings.TrimSpace(token); token != "" {
-				header.Del(token)
-			}
-		}
-	}
-	for _, name := range []string{
-		"Connection",
-		"Keep-Alive",
-		"Proxy-Authenticate",
-		"Proxy-Authorization",
-		"TE",
-		"Trailer",
-		"Transfer-Encoding",
-		"Upgrade",
-	} {
-		header.Del(name)
-	}
-}
-
-func tunnel(dst io.WriteCloser, src io.ReadCloser) {
-	defer dst.Close()
-	defer src.Close()
-	_, _ = io.Copy(dst, src)
+	s.certs[hostname] = cert
+	return cert, nil
 }
