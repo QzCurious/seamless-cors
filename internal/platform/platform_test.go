@@ -26,13 +26,13 @@ func TestManagedPACFootprintMatchesOnlyLoopbackHTTPPACFilename(t *testing.T) {
 	}
 }
 
-func TestOwnedPACStateIncludesDisabledFootprints(t *testing.T) {
+func TestOwnedPACStateIgnoresDisabledFootprints(t *testing.T) {
 	states := []PACServiceState{{
 		Name:    "Wi-Fi",
 		URL:     "http://127.0.0.1:8079/seamless-cors.pac",
 		Enabled: false,
 	}}
-	if !HasOwnedPACState(states) {
-		t.Fatal("disabled owned PAC footprint should still require cleanup")
+	if HasOwnedPACState(states) {
+		t.Fatal("disabled owned PAC footprint should not require cleanup")
 	}
 }

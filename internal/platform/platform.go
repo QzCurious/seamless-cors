@@ -59,7 +59,7 @@ func IsManagedPACFootprint(raw string) bool {
 
 func HasOwnedPACState(states []PACServiceState) bool {
 	for _, state := range states {
-		if IsManagedPACFootprint(state.URL) {
+		if state.Enabled && IsManagedPACFootprint(state.URL) {
 			return true
 		}
 	}

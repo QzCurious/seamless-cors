@@ -81,13 +81,10 @@ func (a *DarwinAdapter) ClearOwnedPAC() error {
 	}
 	var firstErr error
 	for _, state := range states {
-		if !IsManagedPACFootprint(state.URL) {
+		if !state.Enabled || !IsManagedPACFootprint(state.URL) {
 			continue
 		}
 		if _, err := a.networksetup("-setautoproxystate", state.Name, "off"); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		if _, err := a.networksetup("-setautoproxyurl", state.Name, ""); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

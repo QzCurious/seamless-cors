@@ -92,17 +92,18 @@ func TestDarwinAdapterClearsOwnedPACFootprintsAcrossServices(t *testing.T) {
 	joined := strings.Join(runner.calls, "\n")
 	for _, want := range []string{
 		"networksetup -setautoproxystate Wi-Fi off",
-		"networksetup -setautoproxyurl Wi-Fi ",
 		"networksetup -setautoproxystate Thunderbolt Bridge off",
-		"networksetup -setautoproxyurl Thunderbolt Bridge ",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing call %q in:\n%s", want, joined)
 		}
 	}
+	if strings.Contains(joined, "-setautoproxyurl") {
+		t.Fatalf("cleanup should not attempt to blank PAC URLs:\n%s", joined)
+	}
 }
 
-func TestDarwinAdapterClearsDisabledOwnedPACFootprints(t *testing.T) {
+func TestDarwinAdapterIgnoresDisabledOwnedPACFootprints(t *testing.T) {
 	runner := &fakeRunner{
 		autoProxyOut: []byte("URL: http://127.0.0.1:52144/seamless-cors.pac\nEnabled: No\n"),
 	}
@@ -113,13 +114,8 @@ func TestDarwinAdapterClearsDisabledOwnedPACFootprints(t *testing.T) {
 	}
 
 	joined := strings.Join(runner.calls, "\n")
-	for _, want := range []string{
-		"networksetup -setautoproxystate Wi-Fi off",
-		"networksetup -setautoproxyurl Wi-Fi ",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("missing call %q in:\n%s", want, joined)
-		}
+	if strings.Contains(joined, "-setautoproxystate Wi-Fi off") || strings.Contains(joined, "-setautoproxyurl") {
+		t.Fatalf("disabled PAC footprint should not be rewritten:\n%s", joined)
 	}
 }
 

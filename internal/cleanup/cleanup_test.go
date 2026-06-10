@@ -44,8 +44,9 @@ func TestInspectReportsOwnedFootprintWithoutMutating(t *testing.T) {
 	}
 	adapter := &fakeAdapter{
 		pacStates: []platform.PACServiceState{{
-			Name: "Wi-Fi",
-			URL:  "http://127.0.0.1:8079/seamless-cors.pac",
+			Name:    "Wi-Fi",
+			URL:     "http://127.0.0.1:8079/seamless-cors.pac",
+			Enabled: true,
 		}},
 		ca: true,
 	}
