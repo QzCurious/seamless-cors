@@ -107,7 +107,7 @@ func (a *DarwinAdapter) TrustCA(certPEM []byte) error {
 		return err
 	}
 	keychain := a.keychain()
-	_, err = a.security("add-trusted-cert", "-d", "-r", "trustRoot", "-k", keychain, a.certPath)
+	_, err = a.security("add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-k", keychain, a.certPath)
 	if isTrustApprovalDenied(err) {
 		return fmt.Errorf("%w: %w", ErrTrustApprovalDenied, err)
 	}

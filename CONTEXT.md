@@ -193,8 +193,8 @@ A First-Start Bootstrap behavior where generated configuration includes short co
 _Avoid_: opaque default config, verbose manual, runtime listener settings
 
 **Start Guidance**:
-A start-time user-facing output behavior where successful start output points to the editable Explicit Configuration, Domain List, and managed PAC state instead of runtime listener endpoints.
-_Avoid_: listener-first start output, proxy setup instructions, PAC listener summary, control listener summary
+A start-time user-facing output behavior shown only after required lifecycle consent and platform approval have succeeded, pointing to the editable Explicit Configuration, Domain List, and managed PAC state instead of runtime listener endpoints.
+_Avoid_: pre-approval running message, listener-first start output, proxy setup instructions, PAC listener summary, control listener summary
 
 **Pending Lifecycle Change**:
 A restart-applied Explicit Configuration change detected while the gateway is running and reported to the user without being applied automatically.
@@ -223,6 +223,10 @@ _Avoid_: implicit CA trust, persistent CA consent, trust without prompt
 **Independent CA Lifecycle**:
 A lifecycle boundary where CA Trust Consent and Ephemeral User CA setup follow `ca-trusted` independently of whether the Domain List currently has active entries.
 _Avoid_: domain-gated CA trust, implicit CA delay, route-dependent trust setup
+
+**Lifecycle Activation Order**:
+A startup lifecycle boundary where required CA trust approval finishes before managed PAC state and runtime visibility are established, and Start Guidance is shown only after activation has succeeded.
+_Avoid_: PAC-before-trust startup, pre-approval runtime state, status-visible pending approval, half-started gateway
 
 **All-Service PAC Management**:
 A Managed System Proxy behavior where supported platform adapters apply PAC Routing to every network service they manage, so routing remains consistent when the active network changes during a gateway run.

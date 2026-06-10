@@ -72,7 +72,6 @@ func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Wr
 	if err != nil {
 		return err
 	}
-	writeStartGuidance(stdout, snapshot)
 	return runtime.Serve(ctx)
 }
 
@@ -253,22 +252,7 @@ func (r *Runtime) Serve(ctx context.Context) error {
 		r.Close()
 		return err
 	}
-	state := control.RuntimeState{
-		State: r.controlState(),
-		Token: r.token,
-	}
-	if err := r.writeRuntimeState(state); err != nil {
-		r.Close()
-		return err
-	}
 
-	errs := make(chan error, 4)
-	go func() { errs <- r.control.Serve(r.listeners[2]) }()
-
-	if err := r.adapter.InstallPAC("http://" + r.listeners[1].Addr().String() + "/" + platform.PACFootprintFileName); err != nil {
-		r.Close()
-		return err
-	}
 	if r.cfg.CATrusted {
 		authority, err := ca.Create(r.runtimeDir, r.adapter)
 		if err != nil {
@@ -284,12 +268,32 @@ func (r *Runtime) Serve(ctx context.Context) error {
 		}
 		r.authority = authority
 		r.proxyCore.SetAuthority(authority)
-		fmt.Fprintln(r.stdout, "Local CA certificate added to the system trust settings.")
+		fmt.Fprintln(r.stdout, "Local CA certificate added to the current user's SSL trust settings.")
+	}
+
+	errs := make(chan error, 4)
+	go func() { errs <- r.control.Serve(r.listeners[2]) }()
+
+	if err := r.adapter.InstallPAC("http://" + r.listeners[1].Addr().String() + "/" + platform.PACFootprintFileName); err != nil {
+		r.Close()
+		return err
+	}
+	state := control.RuntimeState{
+		State: r.controlState(),
+		Token: r.token,
+	}
+	if err := r.writeRuntimeState(state); err != nil {
+		r.Close()
+		return err
 	}
 
 	go r.watchLiveConfig(ctx, errs)
 	go func() { errs <- r.proxy.Serve(r.listeners[0]) }()
 	go func() { errs <- r.pac.Serve(r.listeners[1]) }()
+	writeStartGuidance(r.stdout, liveconfig.Snapshot{
+		ConfigPath:     r.cfg.SourcePath,
+		DomainListPath: r.cfg.DomainList,
+	})
 
 	select {
 	case <-ctx.Done():

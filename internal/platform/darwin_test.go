@@ -166,12 +166,15 @@ RQIhAOoa4X7HjCOTEOEdPAQRxIhH3WETktsEOl3ZK9otm64jAiBEfd+WY1KcU6RC
 
 	joined := strings.Join(runner.calls, "\n")
 	for _, want := range []string{
-		"security add-trusted-cert -d -r trustRoot -k /tmp/login.keychain-db",
+		"security add-trusted-cert -r trustRoot -p ssl -k /tmp/login.keychain-db",
 		"security delete-certificate -Z",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing call %q in:\n%s", want, joined)
 		}
+	}
+	if strings.Contains(joined, "security add-trusted-cert -d") {
+		t.Fatalf("CA trust should be installed in the current user's trust settings:\n%s", joined)
 	}
 }
 

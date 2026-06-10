@@ -27,6 +27,8 @@ type fakeAdapter struct {
 	cleanedCA    int
 	caFootprint  bool
 	trustErr     error
+	trustStarted chan struct{}
+	releaseTrust chan struct{}
 }
 
 func (f *fakeAdapter) InstallPAC(url string) error {
@@ -43,6 +45,12 @@ func (f *fakeAdapter) ClearOwnedPAC() error {
 func (f *fakeAdapter) HasCAFootprint() (bool, error) { return f.caFootprint, nil }
 func (f *fakeAdapter) TrustCA([]byte) error {
 	f.trusted++
+	if f.trustStarted != nil {
+		close(f.trustStarted)
+	}
+	if f.releaseTrust != nil {
+		<-f.releaseTrust
+	}
 	return f.trustErr
 }
 func (f *fakeAdapter) CleanupCAFootprint() error {
@@ -139,7 +147,7 @@ func TestRuntimeUsesAdapterAndCleansUpLifecycleState(t *testing.T) {
 	if fake.cleanedCA == 0 {
 		t.Fatalf("CA cleanup calls = %d", fake.cleanedCA)
 	}
-	if !strings.Contains(out.String(), "Local CA certificate added to the system trust settings.") {
+	if !strings.Contains(out.String(), "Local CA certificate added to the current user's SSL trust settings.") {
 		t.Fatalf("success output = %q", out.String())
 	}
 }
@@ -167,6 +175,61 @@ func TestRuntimePrintsCancelMessageWhenTrustApprovalDenied(t *testing.T) {
 		"Run the command again and approve the system prompt, or set ca-trusted: false.\n"
 	if out.String() != want {
 		t.Fatalf("cancel output = %q", out.String())
+	}
+	if fake.installedPAC != "" {
+		t.Fatalf("trust denial installed PAC: %q", fake.installedPAC)
+	}
+}
+
+func TestRuntimeWaitsForCATrustApprovalBeforeActivation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	entry, err := domain.ParseEntry("api.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.CATrusted = true
+	cfg.SourcePath = filepath.Join(home, ".seamless-cors", "config.yaml")
+	cfg.DomainList = filepath.Join(home, ".seamless-cors", "domains.txt")
+	fake := &fakeAdapter{
+		trustStarted: make(chan struct{}),
+		releaseTrust: make(chan struct{}),
+	}
+	var out bytes.Buffer
+	runtime, err := NewRuntime(cfg, []domain.Entry{entry}, fake, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runtime.Serve(ctx) }()
+	<-fake.trustStarted
+
+	if fake.installedPAC != "" {
+		t.Fatalf("pending trust approval installed PAC: %q", fake.installedPAC)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".seamless-cors", "runtime", "control-state.json")); !os.IsNotExist(err) {
+		t.Fatalf("pending trust approval wrote runtime state: %v", err)
+	}
+	if strings.Contains(out.String(), "seamless-cors running") {
+		t.Fatalf("pending trust approval printed start guidance:\n%s", out.String())
+	}
+
+	close(fake.releaseTrust)
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
+	waitForStatusOutput(t, "seamless-cors status: running")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	caIndex := strings.Index(got, "Local CA certificate added")
+	runningIndex := strings.Index(got, "seamless-cors running")
+	if caIndex < 0 || runningIndex < 0 || caIndex > runningIndex {
+		t.Fatalf("start output order = %q", got)
 	}
 }
 
