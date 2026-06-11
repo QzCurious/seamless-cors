@@ -14,27 +14,16 @@ type fakeAdapter struct {
 	pacStates []platform.PACServiceState
 	ca        bool
 	clearErr  error
-	caErr     error
 	cleared   int
-	cleanedCA int
 }
 
 func (f *fakeAdapter) CurrentPACState() ([]platform.PACServiceState, error) {
 	return f.pacStates, nil
 }
 
-func (f *fakeAdapter) HasCAFootprint() (bool, error) {
-	return f.ca, nil
-}
-
 func (f *fakeAdapter) ClearOwnedPAC() error {
 	f.cleared++
 	return f.clearErr
-}
-
-func (f *fakeAdapter) CleanupCAFootprint() error {
-	f.cleanedCA++
-	return f.caErr
 }
 
 func TestInspectReportsOwnedFootprintWithoutMutating(t *testing.T) {
@@ -56,20 +45,20 @@ func TestInspectReportsOwnedFootprintWithoutMutating(t *testing.T) {
 	if !inspection.Needed() {
 		t.Fatal("owned footprint should require cleanup")
 	}
-	if !inspection.StaleRuntimeState || !inspection.OwnedPAC || !inspection.OwnedCA {
+	if !inspection.StaleRuntimeState || !inspection.OwnedPAC {
 		t.Fatalf("inspection = %#v", inspection)
 	}
 	if got := strings.Join(inspection.RuntimeFiles, ","); got != "control-state.json" {
 		t.Fatalf("runtime files = %q", got)
 	}
-	if adapter.cleared != 0 || adapter.cleanedCA != 0 {
-		t.Fatalf("inspect mutated adapter: PAC=%d CA=%d", adapter.cleared, adapter.cleanedCA)
+	if adapter.cleared != 0 {
+		t.Fatalf("inspect mutated adapter: PAC=%d", adapter.cleared)
 	}
 }
 
 func TestCleanRemovesOwnedRuntimeFilesAndCallsAdapters(t *testing.T) {
 	runtimeDir := t.TempDir()
-	for _, name := range []string{"ephemeral-ca.pem", "ephemeral-ca-key.pem", "control-state.json"} {
+	for _, name := range []string{"control-state.json"} {
 		if err := os.WriteFile(filepath.Join(runtimeDir, name), []byte("owned"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -80,8 +69,8 @@ func TestCleanRemovesOwnedRuntimeFilesAndCallsAdapters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if adapter.cleared != 1 || adapter.cleanedCA != 1 {
-		t.Fatalf("cleanup calls: PAC=%d CA=%d", adapter.cleared, adapter.cleanedCA)
+	if adapter.cleared != 1 {
+		t.Fatalf("cleanup calls: PAC=%d", adapter.cleared)
 	}
 	for _, name := range ownedRuntimeFiles {
 		if _, err := os.Stat(filepath.Join(runtimeDir, name)); !os.IsNotExist(err) {
@@ -93,7 +82,6 @@ func TestCleanRemovesOwnedRuntimeFilesAndCallsAdapters(t *testing.T) {
 func TestCleanGroupsFailuresWithRetryGuidance(t *testing.T) {
 	adapter := &fakeAdapter{
 		clearErr: errors.New("pac denied"),
-		caErr:    errors.New("ca denied"),
 	}
 
 	err := Clean(t.TempDir(), adapter)
@@ -107,7 +95,6 @@ func TestCleanGroupsFailuresWithRetryGuidance(t *testing.T) {
 	got := err.Error()
 	for _, want := range []string{
 		"managed PAC cleanup failed: pac denied",
-		"CA trust cleanup failed: ca denied",
 		"Cleanup failed; resolve the OS or permission problem, then run `seamless-cors stop` again.",
 	} {
 		if !strings.Contains(got, want) {

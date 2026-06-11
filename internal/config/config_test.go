@@ -12,8 +12,8 @@ func TestDefaultConfigMatchesPRD(t *testing.T) {
 	if cfg.DomainList != "~/.seamless-cors/domains.txt" {
 		t.Fatalf("DomainList = %q", cfg.DomainList)
 	}
-	if cfg.CATrusted {
-		t.Fatalf("CATrusted = true")
+	if !cfg.CATrusted {
+		t.Fatalf("CATrusted = false")
 	}
 }
 
@@ -47,8 +47,8 @@ func TestLoadOrBootstrapCreatesCommentedDefaults(t *testing.T) {
 	if !loaded.Bootstrapped {
 		t.Fatal("expected first-start bootstrap")
 	}
-	if loaded.Config.CATrusted {
-		t.Fatal("ca-trusted default should require config edit")
+	if !loaded.Config.CATrusted {
+		t.Fatal("ca-trusted default should enable trusted HTTPS")
 	}
 	if loaded.DomainPath != filepath.Join(home, ".seamless-cors", "domains.txt") {
 		t.Fatalf("domain path = %q", loaded.DomainPath)

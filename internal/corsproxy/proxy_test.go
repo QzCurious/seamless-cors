@@ -3,6 +3,7 @@ package corsproxy
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"io"
 	"log"
@@ -137,6 +138,13 @@ func TestTrustedHTTPSInterceptionRepairsResponseAndCompletes(t *testing.T) {
 	if string(body) != "secure upstream body" {
 		t.Fatalf("body = %q", string(body))
 	}
+	if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+		t.Fatal("missing intercepted TLS peer certificate")
+	}
+	leaf := resp.TLS.PeerCertificates[0]
+	if got := leaf.NotAfter.Sub(leaf.NotBefore); got != ca.LeafValidity {
+		t.Fatalf("leaf validity = %s, want %s", got, ca.LeafValidity)
+	}
 }
 
 func TestTrustedHTTPSInterceptionAnswersPreflightLocally(t *testing.T) {
@@ -234,7 +242,8 @@ func (w failingWriter) Write([]byte) (int, error) {
 
 func trustedProxyServer(t *testing.T, upstreamClient *http.Client) (*httptest.Server, *url.URL, *tls.Config) {
 	t.Helper()
-	authority, err := ca.Create(t.TempDir(), platform.NoopAdapter{})
+	store := &testTrustStore{}
+	authority, _, err := ca.Ensure(t.TempDir(), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,6 +264,33 @@ func trustedProxyServer(t *testing.T, upstreamClient *http.Client) (*httptest.Se
 		t.Fatal("failed to trust gateway CA")
 	}
 	return proxyServer, proxyURL, &tls.Config{RootCAs: roots}
+}
+
+type testTrustStore struct {
+	records []platform.CARecord
+}
+
+func (s *testTrustStore) TrustedCAs() ([]platform.CARecord, error) {
+	return append([]platform.CARecord(nil), s.records...), nil
+}
+
+func (s *testTrustStore) TrustCA(certPEM []byte) error {
+	fingerprint, err := ca.SHA1Fingerprint(certPEM)
+	if err != nil {
+		return err
+	}
+	block, _ := pem.Decode(certPEM)
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return err
+	}
+	s.records = []platform.CARecord{{SHA1: fingerprint, CertPEM: certPEM, NotAfter: cert.NotAfter}}
+	return nil
+}
+
+func (s *testTrustStore) RemoveCAs([]string) error {
+	s.records = nil
+	return nil
 }
 
 func newTestCore(t *testing.T, opts Options) *Core {

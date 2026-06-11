@@ -44,6 +44,30 @@ _Avoid_: cross-platform binary
 A supported operating system where the gateway can configure PAC Routing and user trust on behalf of the user.
 _Avoid_: manual platform, manual proxy fallback, all-platform parity without adapters
 
+**Platform Capability Check**:
+A preflight lifecycle behavior where the gateway verifies that the current platform can manage required PAC and user trust operations before making lifecycle changes.
+_Avoid_: partial platform setup, trust install on unsupported platform, continue-anyway platform prompt
+
+**Capability Check Command**:
+A read-only user-facing command that reports whether the current system can run the managed gateway lifecycle before the user attempts installation or start.
+_Avoid_: hidden compatibility discovery, lifecycle-only platform errors, mutating compatibility check
+
+**Capability-Only Check**:
+A command boundary where `check` reports platform capability without reporting or repairing current Installed User CA state.
+_Avoid_: check-as-status, check-triggered CA inspection side effects
+
+**Footprint-Free Check**:
+A command boundary where `check` reports platform capability without creating configuration, runtime, CA, or home config files and directories.
+_Avoid_: check-time bootstrap, check-time cleanup, check-time CA storage
+
+**Detailed Capability Report**:
+A capability reporting behavior that shows both an overall support result and individual platform capability results for managed PAC, CA trust, and cleanup.
+_Avoid_: opaque unsupported result, single-error compatibility check
+
+**Best-Effort Stop**:
+A stop behavior where cleanup still attempts to remove owned runtime and PAC state even when capability checks are limited or reporting platform problems.
+_Avoid_: capability-blocked cleanup, leaving owned runtime state behind
+
 **User-Trusted Development CA**:
 A local certificate authority trusted only in the current user's trust store so the gateway can inspect HTTPS traffic for configured upstream domains during DEV/QA work.
 _Avoid_: system-wide CA, production CA, shared CA
@@ -52,17 +76,53 @@ _Avoid_: system-wide CA, production CA, shared CA
 A trust model where the gateway manages only the current user's operating-system trust store and does not inspect or manage browser-specific trust stores.
 _Avoid_: browser trust management, profile-specific trust diagnostics
 
-**Ephemeral User CA**:
-A local development certificate authority generated for a gateway run, trusted only in the current user's operating-system trust store, and removed with its local files when the gateway stops.
-_Avoid_: persistent CA, system-wide CA, retained CA key
+**Installed User CA**:
+A long-lived local development certificate authority trusted only in the current user's operating-system trust store and reused across trusted gateway starts until it is removed or replaced.
+_Avoid_: per-start CA, system-wide CA, shared CA
+
+**Installed User CA Renewal**:
+A lifecycle behavior where an unavailable, invalid, expired, or near-expiry Installed User CA is replaced before trusted HTTPS interception starts.
+_Avoid_: expired trust reuse, surprise HTTPS breakage, silent CA replacement
+
+**CA Replacement Rule**:
+A CA lifecycle rule where only fully usable Installed User CA state is reused, local permission issues are repaired in place, and every other unusable state is treated by removing owned CA state before installing fresh CA material.
+_Avoid_: partial CA reuse, trusting stale local material, special-case invalid states
+
+**CA Ensure**:
+A lifecycle behavior where `start` with `ca-trusted: true` and CA Lifecycle Commands verify that usable Installed User CA trust exists, requesting platform approval only when trust must be added or replaced.
+_Avoid_: repeated trust prompt, start without usable trust, install-only trust repair
+
+**Single Installed CA State**:
+A CA lifecycle invariant where multiple seamless-cors-owned CA trust footprints are treated as repair-needed state and replaced by one usable Installed User CA.
+_Avoid_: multiple active development CAs, ambiguous signing identity
+
+**CA Material Integrity**:
+A CA lifecycle invariant where current-user CA trust and the local signing key must match; missing or mismatched CA material is treated as repair-needed state.
+_Avoid_: trusted cert without signing key, orphaned signing key, mismatched CA pair
+
+**OS-Backed CA Installation**:
+A CA lifecycle invariant where Installed User CA state requires current-user operating-system trust; local CA material alone is not installed trust.
+_Avoid_: file-only installation, assuming trust from local material
+
+**CA Permission Repair**:
+A CA lifecycle behavior where otherwise-valid Installed User CA material with loose local file permissions is tightened in place without replacing trusted CA identity.
+_Avoid_: permission-triggered CA rotation, loose CA key permissions
+
+**Leaf Certificate Reuse**:
+A runtime behavior where generated per-host HTTPS certificates may be reused within a gateway process until their generation age exceeds the cache reuse limit, but are not persisted as trusted identity across gateway runs.
+_Avoid_: persistent leaf certificate inventory, per-request certificate churn, expiry-only cache policy
+
+**Per-Host Leaf Certificate**:
+A generated HTTPS server certificate for the specific upstream hostname being intercepted, signed by the Installed User CA on demand.
+_Avoid_: Domain List-wide leaf certificate, wildcard-first certificate strategy, persisted leaf identity
 
 **Trusted HTTPS Interception**:
-A lifecycle behavior where HTTPS traffic that reaches the Proxy Listener is intercepted only when `ca-trusted` is enabled and the Ephemeral User CA is trusted for the current user.
+A lifecycle behavior where HTTPS traffic that reaches the Proxy Listener is intercepted only when `ca-trusted` is enabled and the Installed User CA is trusted for the current user.
 _Avoid_: untrusted HTTPS interception, broken MITM, Domain List gated interception
 
-**Opt-In CA Trust**:
-A lifecycle default where generated configuration starts with `ca-trusted: false` so HTTPS interception requires an explicit user choice.
-_Avoid_: default CA trust, implicit HTTPS interception
+**Default Trusted HTTPS**:
+A lifecycle default where generated configuration starts with `ca-trusted: true`, while Installed User CA trust is still added or replaced only through CA Ensure and required platform approval.
+_Avoid_: silent trust installation, disabled-by-default HTTPS interception, config-only trust
 
 **Live Configuration**:
 A gateway behavior where request handling uses the newest available request policy without requiring the user to manually restart or reload the program.
@@ -120,6 +180,10 @@ _Avoid_: platform-native app config directory
 The durable location under the Home Config Directory for runtime coordination state and product-owned cleanup files.
 _Avoid_: temp runtime state, volatile cleanup files
 
+**Installed CA Storage**:
+The durable location under the Home Config Directory for seamless-cors-owned Installed User CA material, kept outside Runtime Cleanup.
+_Avoid_: runtime CA storage, temp CA files, stop-owned CA files
+
 **Runtime State File**:
 A durable runtime record that signals a possible active gateway instance, including the automatic Control Endpoint needed by `stop` and `status`.
 _Avoid_: pid-only lock file, configured control address, in-memory instance registry
@@ -141,7 +205,7 @@ The stable loopback HTTP PAC URL shape whose path ends in `seamless-cors.pac`, p
 _Avoid_: run-specific PAC identity, port-based ownership, full-URL ownership, non-loopback PAC ownership
 
 **CA Footprint**:
-The strict seamless-cors-owned current-user CA trust identity used to identify Ephemeral User CA trust for cleanup.
+The strict seamless-cors-owned current-user CA trust identity used to identify Installed User CA trust for lifecycle management.
 _Avoid_: name-contains matching, system-wide CA cleanup, user-authored CA identity
 
 **Cleanup Retry Guidance**:
@@ -185,16 +249,16 @@ A lifecycle boundary where Managed PAC Consent and PAC Routing setup follow gate
 _Avoid_: domain-gated PAC setup, delayed proxy ownership, route-count-based lifecycle
 
 **CA Trust Consent**:
-An Explicit Lifecycle Consent required on each gateway start with `ca-trusted: true` before adding Ephemeral User CA trust for HTTPS interception.
-_Avoid_: implicit CA trust, persistent CA consent, trust without prompt
+A platform approval moment required before adding or replacing Installed User CA trust for HTTPS interception, with gateway context shown only when the platform requires approval.
+_Avoid_: implicit CA trust, repeated consent for unchanged trust, app-only trust prompt
 
 **Independent CA Lifecycle**:
-A lifecycle boundary where CA Trust Consent and Ephemeral User CA setup follow `ca-trusted` independently of whether the Domain List currently has active entries.
+A lifecycle boundary where CA Trust Consent and Installed User CA availability follow `ca-trusted` independently of whether the Domain List currently has active entries.
 _Avoid_: domain-gated CA trust, implicit CA delay, route-dependent trust setup
 
 **Lifecycle Activation Order**:
-A startup lifecycle boundary where required CA trust approval finishes before managed PAC state and runtime visibility are established, and Start Guidance is shown only after activation has succeeded.
-_Avoid_: PAC-before-trust startup, pre-approval runtime state, status-visible pending approval, half-started gateway
+A startup lifecycle boundary where required CA trust approval and CA Ensure finish before managed PAC state and runtime visibility are established, and Start Guidance is shown only after activation has succeeded.
+_Avoid_: pre-validation trust changes, PAC-before-trust startup, degraded trusted mode, pre-approval runtime state, status-visible pending approval, half-started gateway
 
 **All-Service PAC Management**:
 A Managed System Proxy behavior where supported platform adapters apply PAC Routing to every network service they manage, so routing remains consistent when the active network changes during a gateway run.
@@ -204,17 +268,33 @@ _Avoid_: active-service-only PAC, partial network setup
 The user-facing command model where normal operation is limited to starting, stopping, and checking the gateway while runtime behavior follows Live Configuration.
 _Avoid_: command-heavy configuration, flag-driven operation
 
-**Three Commands**:
-The v1 command surface: `start`, `stop`, and `status`.
-_Avoid_: init command, trust command, config editing command
+**CA Lifecycle Commands**:
+Top-level user-facing commands that explicitly install, repair, or remove the Installed User CA outside the normal start/stop gateway loop, with removal requiring that no gateway instance is running.
+_Avoid_: nested CA command tree, hidden CA removal, per-start CA trust, config editing command, active-runtime CA removal, extra command confirmation
+
+**Config-Independent CA Install**:
+A CA lifecycle command boundary where installing or repairing the Installed User CA does not require, create, or modify Explicit Configuration, though existing configuration may be read for guidance.
+_Avoid_: install-time config bootstrap, install changing `ca-trusted`, config-required CA repair
+
+**Idempotent CA Install**:
+A CA lifecycle command behavior where installing reports existing usable CA trust as success without requesting platform approval or changing CA material.
+_Avoid_: reinstalling usable CA, noisy no-op install, repeated trust approval
+
+**Config-Independent CA Uninstall**:
+A CA lifecycle command boundary where removing the Installed User CA does not modify Explicit Configuration; future trusted starts may reinstall trust when configuration still requests it.
+_Avoid_: uninstall changing `ca-trusted`, disabling desired HTTPS interception, config-coupled removal
+
+**Complete CA Uninstall**:
+A CA lifecycle invariant where uninstall reports success only after seamless-cors-owned current-user CA trust and local CA material are both absent.
+_Avoid_: false uninstall success, trusted CA without local material, leftover private key
 
 **Foreground Start**:
 A v1 runtime behavior where `start` runs attached in the foreground rather than launching an official background daemon.
 _Avoid_: daemon mode, background start
 
 **Runtime Cleanup**:
-An idempotent lifecycle behavior where `start`, `stop`, and gateway shutdown remove seamless-cors-owned PAC settings, CA trust, and runtime files proven by footprint or runtime-file ownership, treating missing resources as already clean. `start` performs Runtime Cleanup only when no active gateway is verified.
-_Avoid_: status cleanup, broad cleanup, file-only deletion, crash recovery, restore-based cleanup
+An idempotent lifecycle behavior where `start`, `stop`, and gateway shutdown remove seamless-cors-owned PAC settings and runtime process state proven by footprint or runtime-file ownership, treating missing resources as already clean. `start` performs Runtime Cleanup only when no active gateway is verified.
+_Avoid_: status cleanup, broad cleanup, CA removal, restore-based cleanup
 
 **No PAC Restoration**:
 A cleanup boundary where Runtime Cleanup removes seamless-cors-owned managed PAC settings without reconstructing previous machine PAC state.
@@ -225,8 +305,12 @@ A status output intended for interactive DEV/QA use rather than machine-readable
 _Avoid_: JSON status, scripting API
 
 **Read-Only Status**:
-A status behavior that reports gateway and cleanup-needed state, including stale Runtime State File detection, without changing proxy settings, CA trust, or runtime files.
+A status behavior that reports gateway, cleanup-needed, and Installed User CA state, including stale Runtime State File detection, without changing proxy settings, CA trust, local CA material, or runtime files.
 _Avoid_: status-triggered cleanup, mutating status command
+
+**CA Health Status**:
+A read-only status vocabulary for Installed User CA state using stable values such as usable, missing, expired, expiring-soon, invalid, multiple, mismatched-material, unsupported, and unknown.
+_Avoid_: prose-only CA state, status-triggered CA repair
 
 **Diagnostic Runtime Endpoint**:
 An automatically selected listener address shown by status for troubleshooting, not for user proxy setup or configuration.
@@ -404,19 +488,19 @@ QA engineer: "Trust-Aware PAC Routing does not send matched HTTPS traffic to the
 
 Developer: "Will the first run automatically trust a CA?"
 
-QA engineer: "No, Opt-In CA Trust makes HTTPS interception an explicit configuration choice."
+QA engineer: "Default Trusted HTTPS makes HTTPS interception the generated configuration default, but CA Ensure still requires platform approval before adding user trust."
 
 Developer: "Will the gateway keep reusing the same development CA?"
 
-QA engineer: "No, Ephemeral User CA generates trust material for a gateway run, and Runtime Cleanup removes it."
+QA engineer: "Yes. Installed User CA reuses trusted CA material across trusted gateway starts until it is removed or replaced."
 
 Developer: "What removes trusted CA material?"
 
-QA engineer: "Runtime Cleanup removes seamless-cors-owned CA trust and runtime CA files."
+QA engineer: "CA lifecycle commands remove seamless-cors-owned CA trust and local CA material."
 
 Developer: "What happens if the gateway crashes before removing its CA?"
 
-QA engineer: "Runtime Cleanup removes leftover Ephemeral User CA trust and files on the next start or stop."
+QA engineer: "Installed User CA remains available for the next trusted gateway start unless the user removes it."
 
 Developer: "Will every operating system have the same managed setup in v1?"
 
@@ -440,7 +524,7 @@ QA engineer: "No, the Minimal Command Surface keeps commands rare and lets confi
 
 Developer: "Which commands exist in v1?"
 
-QA engineer: "Three Commands: `start`, `stop`, and `status`."
+QA engineer: "`start`, `stop`, and `status` manage the gateway runtime; CA Lifecycle Commands manage Installed User CA trust."
 
 Developer: "Does `start` launch a background service?"
 
@@ -448,7 +532,7 @@ QA engineer: "No, Foreground Start keeps the gateway attached and lets Ctrl-C ru
 
 Developer: "Does Ctrl-C clean up the proxy and CA?"
 
-QA engineer: "Yes, Runtime Cleanup runs on Ctrl-C and the stop command."
+QA engineer: "Ctrl-C runs Runtime Cleanup for gateway runtime state, but Installed User CA trust remains until a CA Lifecycle Command removes it."
 
 Developer: "What if stop finds only cleanup-needed state?"
 

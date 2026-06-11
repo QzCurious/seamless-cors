@@ -142,8 +142,8 @@ RQIhAOoa4X7HjCOTEOEdPAQRxIhH3WETktsEOl3ZK9otm64jAiBEfd+WY1KcU6RC
 	}
 }
 
-func TestDarwinAdapterTrustsAndRemovesEphemeralCAInUserKeychain(t *testing.T) {
-	runner := &fakeRunner{findCertOut: testFindCertificateOutput(testCertificate(t, ephemeralCACommonName, true))}
+func TestDarwinAdapterTrustsAndRemovesInstalledCAInUserKeychain(t *testing.T) {
+	runner := &fakeRunner{findCertOut: testFindCertificateOutput(testCertificate(t, installedCACommonName, true))}
 	adapter := &DarwinAdapter{runner: runner, keychainPath: "/tmp/login.keychain-db"}
 	certPEM := []byte(`-----BEGIN CERTIFICATE-----
 MIIBhTCCASugAwIBAgIBATAKBggqhkjOPQQDAjAUMRIwEAYDVQQDEwlkZXYtdGVz
@@ -160,7 +160,7 @@ RQIhAOoa4X7HjCOTEOEdPAQRxIhH3WETktsEOl3ZK9otm64jAiBEfd+WY1KcU6RC
 	if err := adapter.TrustCA(certPEM); err != nil {
 		t.Fatal(err)
 	}
-	if err := adapter.CleanupCAFootprint(); err != nil {
+	if err := adapter.RemoveCAs(nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -179,10 +179,10 @@ RQIhAOoa4X7HjCOTEOEdPAQRxIhH3WETktsEOl3ZK9otm64jAiBEfd+WY1KcU6RC
 }
 
 func TestDarwinAdapterDoesNotRemoveSameNameNonCAFootprint(t *testing.T) {
-	runner := &fakeRunner{findCertOut: testFindCertificateOutput(testCertificate(t, ephemeralCACommonName, false))}
+	runner := &fakeRunner{findCertOut: testFindCertificateOutput(testCertificate(t, installedCACommonName, false))}
 	adapter := &DarwinAdapter{runner: runner, keychainPath: "/tmp/login.keychain-db"}
 
-	if err := adapter.CleanupCAFootprint(); err != nil {
+	if err := adapter.RemoveCAs(nil); err != nil {
 		t.Fatal(err)
 	}
 

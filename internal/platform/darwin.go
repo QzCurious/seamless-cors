@@ -12,10 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
-const ephemeralCACommonName = "seamless-cors Ephemeral User CA"
+const installedCACommonName = "seamless-cors Installed User CA"
 
 func init() {
 	CurrentAdapter = NewDarwinAdapter()
@@ -40,6 +41,16 @@ func (execRunner) run(name string, args ...string) ([]byte, error) {
 
 func NewDarwinAdapter() *DarwinAdapter {
 	return &DarwinAdapter{runner: execRunner{}}
+}
+
+func (a *DarwinAdapter) Capabilities() CapabilityReport {
+	return CapabilityReport{
+		Platform:          runtime.GOOS + "/" + runtime.GOARCH,
+		Supported:         true,
+		PACManagement:     CapabilitySupported,
+		CATrustManagement: CapabilitySupported,
+		RuntimeCleanup:    CapabilitySupported,
+	}
 }
 
 func (a *DarwinAdapter) InstallPAC(url string) error {
@@ -102,7 +113,7 @@ func (a *DarwinAdapter) TrustCA(certPEM []byte) error {
 	if err != nil {
 		return err
 	}
-	a.certPath = filepath.Join(dir, "ephemeral-ca.pem")
+	a.certPath = filepath.Join(dir, "root-ca.pem")
 	if err := os.WriteFile(a.certPath, certPEM, 0o600); err != nil {
 		return err
 	}
@@ -114,18 +125,19 @@ func (a *DarwinAdapter) TrustCA(certPEM []byte) error {
 	return err
 }
 
-func (a *DarwinAdapter) HasCAFootprint() (bool, error) {
-	fingerprints, err := a.caFootprintSHA1s()
-	if err != nil {
-		return false, err
-	}
-	return len(fingerprints) > 0, nil
+func (a *DarwinAdapter) TrustedCAs() ([]CARecord, error) {
+	return a.caFootprints()
 }
 
-func (a *DarwinAdapter) CleanupCAFootprint() error {
-	fingerprints, err := a.caFootprintSHA1s()
-	if err != nil {
-		return err
+func (a *DarwinAdapter) RemoveCAs(fingerprints []string) error {
+	if len(fingerprints) == 0 {
+		records, err := a.caFootprints()
+		if err != nil {
+			return err
+		}
+		for _, record := range records {
+			fingerprints = append(fingerprints, record.SHA1)
+		}
 	}
 	var firstErr error
 	for _, fingerprint := range fingerprints {
@@ -179,8 +191,8 @@ func (a *DarwinAdapter) getAutoProxy(service string) (PACServiceState, error) {
 	return state, nil
 }
 
-func (a *DarwinAdapter) caFootprintSHA1s() ([]string, error) {
-	out, err := a.security("find-certificate", "-a", "-c", ephemeralCACommonName, "-p", "-Z", a.keychain())
+func (a *DarwinAdapter) caFootprints() ([]CARecord, error) {
+	out, err := a.security("find-certificate", "-a", "-c", installedCACommonName, "-p", "-Z", a.keychain())
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "could not be found") ||
 			strings.Contains(strings.ToLower(string(out)), "could not be found") {
@@ -188,18 +200,27 @@ func (a *DarwinAdapter) caFootprintSHA1s() ([]string, error) {
 		}
 		return nil, err
 	}
-	return strictCAFootprintSHA1s(out), nil
+	return strictCAFootprintRecords(out), nil
 }
 
 func strictCAFootprintSHA1s(out []byte) []string {
-	var fingerprints []string
+	records := strictCAFootprintRecords(out)
+	fingerprints := make([]string, 0, len(records))
+	for _, record := range records {
+		fingerprints = append(fingerprints, record.SHA1)
+	}
+	return fingerprints
+}
+
+func strictCAFootprintRecords(out []byte) []CARecord {
+	var records []CARecord
 	var currentSHA1 string
 	var pemLines []string
 	for _, line := range strings.Split(string(out), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if value, ok := strings.CutPrefix(trimmed, "SHA-1 hash: "); ok {
-			if fingerprintMatchesStrictCA(currentSHA1, pemLines) {
-				fingerprints = append(fingerprints, currentSHA1)
+			if record, ok := caRecordFromFingerprint(currentSHA1, pemLines); ok {
+				records = append(records, record)
 			}
 			currentSHA1 = strings.TrimSpace(value)
 			pemLines = nil
@@ -207,29 +228,38 @@ func strictCAFootprintSHA1s(out []byte) []string {
 			pemLines = append(pemLines, line)
 		}
 	}
-	if fingerprintMatchesStrictCA(currentSHA1, pemLines) {
-		fingerprints = append(fingerprints, currentSHA1)
+	if record, ok := caRecordFromFingerprint(currentSHA1, pemLines); ok {
+		records = append(records, record)
 	}
-	return fingerprints
+	return records
 }
 
 func fingerprintMatchesStrictCA(fingerprint string, pemLines []string) bool {
+	_, ok := caRecordFromFingerprint(fingerprint, pemLines)
+	return ok
+}
+
+func caRecordFromFingerprint(fingerprint string, pemLines []string) (CARecord, bool) {
 	if fingerprint == "" || len(pemLines) == 0 {
-		return false
+		return CARecord{}, false
 	}
-	block, _ := pem.Decode([]byte(strings.Join(pemLines, "\n")))
+	certPEM := []byte(strings.Join(pemLines, "\n"))
+	block, _ := pem.Decode(certPEM)
 	if block == nil || block.Type != "CERTIFICATE" {
-		return false
+		return CARecord{}, false
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return false
+		return CARecord{}, false
 	}
-	return isStrictCAFootprint(cert)
+	if !isStrictCAFootprint(cert) {
+		return CARecord{}, false
+	}
+	return CARecord{SHA1: fingerprint, CertPEM: certPEM, NotAfter: cert.NotAfter}, true
 }
 
 func isStrictCAFootprint(cert *x509.Certificate) bool {
-	if cert.Subject.CommonName != ephemeralCACommonName {
+	if cert.Subject.CommonName != installedCACommonName {
 		return false
 	}
 	if !cert.IsCA || !cert.BasicConstraintsValid {

@@ -41,7 +41,73 @@ func StartWithContext(ctx context.Context, stdout io.Writer, adapter platform.Ad
 	return StartWithContextAndInput(ctx, nil, stdout, adapter)
 }
 
+func Check(stdout, _ io.Writer) error {
+	writeCapabilityReport(stdout, platform.CurrentAdapter.Capabilities())
+	return nil
+}
+
+func Install(stdout, _ io.Writer) error {
+	adapter := platform.CurrentAdapter
+	if err := requireSupported(adapter.Capabilities()); err != nil {
+		return err
+	}
+	caDir, err := config.CADir()
+	if err != nil {
+		return err
+	}
+	_, result, err := ca.Ensure(caDir, adapter)
+	if err != nil {
+		if errors.Is(err, platform.ErrTrustApprovalDenied) {
+			fmt.Fprintln(stdout, "Certificate trust was not approved.")
+			fmt.Fprintln(stdout, "Run the command again and approve the system prompt.")
+		}
+		return err
+	}
+	if result.Changed {
+		fmt.Fprintln(stdout, "Installed User CA installed.")
+	} else {
+		fmt.Fprintln(stdout, "Installed User CA is already usable.")
+	}
+	if !result.Expires.IsZero() {
+		fmt.Fprintf(stdout, "installed-ca-expires: %s\n", result.Expires.Format("2006-01-02"))
+	}
+	if loaded, err := config.LoadExisting(""); err == nil && !loaded.Config.CATrusted {
+		fmt.Fprintln(stdout, "HTTPS interception is disabled by config: ca-trusted: false.")
+		fmt.Fprintln(stdout, "Set ca-trusted: true to use the Installed User CA.")
+	}
+	return nil
+}
+
+func Uninstall(stdout, _ io.Writer) error {
+	adapter := platform.CurrentAdapter
+	report := adapter.Capabilities()
+	if report.CATrustManagement != platform.CapabilitySupported {
+		return fmt.Errorf("CA trust management is unsupported on this platform")
+	}
+	if active, err := activeRuntimeState(); err != nil {
+		return err
+	} else if active {
+		fmt.Fprintln(stdout, "seamless-cors is running; stop it before uninstalling the Installed User CA.")
+		return fmt.Errorf("seamless-cors is running")
+	}
+	caDir, err := config.CADir()
+	if err != nil {
+		return err
+	}
+	if err := ca.Uninstall(caDir, adapter); err != nil {
+		return err
+	}
+	if report, err := ca.Inspect(caDir, adapter); err == nil && report.Health != ca.HealthMissing {
+		return fmt.Errorf("Installed User CA uninstall incomplete: installed-ca: %s", report.Health)
+	}
+	fmt.Fprintln(stdout, "Installed User CA uninstalled.")
+	return nil
+}
+
 func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Writer, adapter platform.Adapter) error {
+	if err := requireSupported(adapter.Capabilities()); err != nil {
+		return err
+	}
 	if active, err := activeRuntimeState(); err != nil {
 		return err
 	} else if active {
@@ -61,7 +127,6 @@ func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Wr
 	}
 	consent := lifecycleConsentRequest{
 		ManagedPAC:      platform.HasForeignEnabledPACState(pacStates),
-		CATrust:         snapshot.CATrusted,
 		CurrentPACState: pacStates,
 	}
 	if err := promptForLifecycleConsent(stdin, stdout, consent); err != nil {
@@ -82,14 +147,31 @@ func writeStartGuidance(stdout io.Writer, snapshot liveconfig.Snapshot) {
 	fmt.Fprintln(stdout, "managed-pac: active")
 }
 
+func requireSupported(report platform.CapabilityReport) error {
+	if report.Supported &&
+		report.PACManagement == platform.CapabilitySupported &&
+		report.CATrustManagement == platform.CapabilitySupported &&
+		report.RuntimeCleanup == platform.CapabilitySupported {
+		return nil
+	}
+	return fmt.Errorf("platform unsupported: run `seamless-cors check` for details")
+}
+
+func writeCapabilityReport(stdout io.Writer, report platform.CapabilityReport) {
+	fmt.Fprintf(stdout, "platform: %s\n", report.Platform)
+	fmt.Fprintf(stdout, "supported: %t\n", report.Supported)
+	fmt.Fprintf(stdout, "pac-management: %s\n", report.PACManagement)
+	fmt.Fprintf(stdout, "ca-trust-management: %s\n", report.CATrustManagement)
+	fmt.Fprintf(stdout, "runtime-cleanup: %s\n", report.RuntimeCleanup)
+}
+
 type lifecycleConsentRequest struct {
 	ManagedPAC      bool
-	CATrust         bool
 	CurrentPACState []platform.PACServiceState
 }
 
 func (r lifecycleConsentRequest) needed() bool {
-	return r.ManagedPAC || r.CATrust
+	return r.ManagedPAC
 }
 
 func promptForLifecycleConsent(stdin io.Reader, stdout io.Writer, req lifecycleConsentRequest) error {
@@ -109,11 +191,6 @@ func promptForLifecycleConsent(stdin io.Reader, stdout io.Writer, req lifecycleC
 			}
 			fmt.Fprintf(stdout, "  %s: enabled=%t url=%s\n", state.Name, state.Enabled, state.URL)
 		}
-	}
-	if req.CATrust {
-		fmt.Fprintln(stdout)
-		fmt.Fprintln(stdout, "CA Trust Consent:")
-		fmt.Fprintln(stdout, "ca-trusted: true adds an ephemeral seamless-cors development CA to the current user's OS trust store for this run.")
 	}
 	fmt.Fprintln(stdout)
 	fmt.Fprint(stdout, "Proceed? [y/N] ")
@@ -147,7 +224,7 @@ type Runtime struct {
 	mu               sync.RWMutex
 	adapter          platform.Adapter
 	stdout           io.Writer
-	authority        *ca.EphemeralAuthority
+	authority        *ca.Authority
 	proxy            *http.Server
 	pacHandler       *pacrouting.DynamicHandler
 	pac              *http.Server
@@ -251,12 +328,17 @@ func (r *Runtime) Serve(ctx context.Context) error {
 	}
 
 	if r.cfg.CATrusted {
-		authority, err := ca.Create(r.runtimeDir, r.adapter)
+		caDir, err := config.CADir()
+		if err != nil {
+			r.Close()
+			return err
+		}
+		authority, result, err := ca.Ensure(caDir, r.adapter)
 		if err != nil {
 			cleanupErr := r.Close()
 			if errors.Is(err, platform.ErrTrustApprovalDenied) {
 				fmt.Fprintln(r.stdout, "Certificate trust was not approved.")
-				fmt.Fprintln(r.stdout, "Run the command again and approve the system prompt, or set ca-trusted: false.")
+				fmt.Fprintln(r.stdout, "Run the command again and approve the system prompt.")
 			}
 			if cleanupErr != nil {
 				return fmt.Errorf("%w; %v", err, cleanupErr)
@@ -264,7 +346,9 @@ func (r *Runtime) Serve(ctx context.Context) error {
 			return err
 		}
 		r.authority = authority
-		fmt.Fprintln(r.stdout, "Local CA certificate added to the current user's SSL trust settings.")
+		if result.Changed {
+			fmt.Fprintln(r.stdout, "Installed User CA added to the current user's SSL trust settings.")
+		}
 	}
 	proxyHandler, err := corsproxy.New(corsproxy.Options{
 		CATrusted: r.cfg.CATrusted,
@@ -341,12 +425,14 @@ func Status(stdout, _ io.Writer) error {
 	state, err := readRuntimeState()
 	if err != nil {
 		fmt.Fprintln(stdout, "seamless-cors status: not running")
+		reportCAHealth(stdout, platform.CurrentAdapter)
 		reportCleanupNeeded(stdout, platform.CurrentAdapter, false)
 		return nil
 	}
 	if err := control.CallStatus("http://"+state.ControlListen, state.Token, stdout); err != nil {
 		return err
 	}
+	reportCAHealth(stdout, platform.CurrentAdapter)
 	if _, err := control.FetchStatus("http://"+state.ControlListen, state.Token); err != nil {
 		fmt.Fprintln(stdout, "stale runtime state detected; run start or stop to clean up")
 		reportCleanupNeeded(stdout, platform.CurrentAdapter, true)
@@ -502,6 +588,27 @@ func reportCleanupNeeded(stdout io.Writer, adapter platform.Adapter, staleState 
 	}
 	if cleanup.Inspect(runtimeDir, adapter, staleState).Needed() {
 		fmt.Fprintln(stdout, "cleanup-needed: run `seamless-cors stop` to clean seamless-cors-owned runtime state")
+	}
+}
+
+func reportCAHealth(stdout io.Writer, adapter platform.Adapter) {
+	if adapter.Capabilities().CATrustManagement != platform.CapabilitySupported {
+		fmt.Fprintln(stdout, "installed-ca: unsupported")
+		return
+	}
+	caDir, err := config.CADir()
+	if err != nil {
+		fmt.Fprintln(stdout, "installed-ca: unknown")
+		return
+	}
+	report, err := ca.Inspect(caDir, adapter)
+	if err != nil {
+		fmt.Fprintln(stdout, "installed-ca: unknown")
+		return
+	}
+	fmt.Fprintf(stdout, "installed-ca: %s\n", report.Health)
+	if !report.Expires.IsZero() {
+		fmt.Fprintf(stdout, "installed-ca-expires: %s\n", report.Expires.Format("2006-01-02"))
 	}
 }
 

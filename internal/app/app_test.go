@@ -3,6 +3,8 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"seamless-cors/internal/ca"
 	"seamless-cors/internal/config"
 	"seamless-cors/internal/control"
 	"seamless-cors/internal/domain"
@@ -25,12 +28,21 @@ type fakeAdapter struct {
 	clearedPAC   int
 	trusted      int
 	cleanedCA    int
-	caFootprint  bool
+	caRecords    []platform.CARecord
 	trustErr     error
 	trustStarted chan struct{}
 	releaseTrust chan struct{}
 }
 
+func (f *fakeAdapter) Capabilities() platform.CapabilityReport {
+	return platform.CapabilityReport{
+		Platform:          "test/test",
+		Supported:         true,
+		PACManagement:     platform.CapabilitySupported,
+		CATrustManagement: platform.CapabilitySupported,
+		RuntimeCleanup:    platform.CapabilitySupported,
+	}
+}
 func (f *fakeAdapter) InstallPAC(url string) error {
 	f.installedPAC = url
 	return nil
@@ -42,8 +54,10 @@ func (f *fakeAdapter) ClearOwnedPAC() error {
 	f.clearedPAC++
 	return nil
 }
-func (f *fakeAdapter) HasCAFootprint() (bool, error) { return f.caFootprint, nil }
-func (f *fakeAdapter) TrustCA([]byte) error {
+func (f *fakeAdapter) TrustedCAs() ([]platform.CARecord, error) {
+	return append([]platform.CARecord(nil), f.caRecords...), nil
+}
+func (f *fakeAdapter) TrustCA(certPEM []byte) error {
 	f.trusted++
 	if f.trustStarted != nil {
 		close(f.trustStarted)
@@ -51,10 +65,26 @@ func (f *fakeAdapter) TrustCA([]byte) error {
 	if f.releaseTrust != nil {
 		<-f.releaseTrust
 	}
+	if f.trustErr == nil {
+		fingerprint, err := ca.SHA1Fingerprint(certPEM)
+		if err != nil {
+			return err
+		}
+		block, _ := pem.Decode(certPEM)
+		if block == nil {
+			return errors.New("invalid test cert")
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return err
+		}
+		f.caRecords = []platform.CARecord{{SHA1: fingerprint, CertPEM: certPEM, NotAfter: cert.NotAfter}}
+	}
 	return f.trustErr
 }
-func (f *fakeAdapter) CleanupCAFootprint() error {
+func (f *fakeAdapter) RemoveCAs([]string) error {
 	f.cleanedCA++
+	f.caRecords = nil
 	return nil
 }
 
@@ -83,10 +113,17 @@ func TestStartGuidanceShowsEditableFilesAndManagedPAC(t *testing.T) {
 	}
 }
 
-func TestLifecycleConsentPromptCombinesCATrustConsent(t *testing.T) {
+func TestLifecycleConsentPromptReportsManagedPACOnly(t *testing.T) {
 	var out bytes.Buffer
 
-	err := promptForLifecycleConsent(bytes.NewBufferString("yes"), &out, lifecycleConsentRequest{CATrust: true})
+	err := promptForLifecycleConsent(bytes.NewBufferString("yes"), &out, lifecycleConsentRequest{
+		ManagedPAC: true,
+		CurrentPACState: []platform.PACServiceState{{
+			Name:    "Wi-Fi",
+			URL:     "http://corp.example/proxy.pac",
+			Enabled: true,
+		}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +131,7 @@ func TestLifecycleConsentPromptCombinesCATrustConsent(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"Explicit Lifecycle Consent required",
-		"CA Trust Consent:",
+		"Managed PAC Consent:",
 		"Proceed? [y/N]",
 	} {
 		if !strings.Contains(got, want) {
@@ -106,12 +143,100 @@ func TestLifecycleConsentPromptCombinesCATrustConsent(t *testing.T) {
 func TestLifecycleConsentPromptDeclineCancels(t *testing.T) {
 	var out bytes.Buffer
 
-	err := promptForLifecycleConsent(bytes.NewBufferString("no"), &out, lifecycleConsentRequest{CATrust: true})
+	err := promptForLifecycleConsent(bytes.NewBufferString("no"), &out, lifecycleConsentRequest{ManagedPAC: true})
 	if !errors.Is(err, ErrLifecycleConsentDeclined) {
 		t.Fatalf("prompt error = %v", err)
 	}
 	if !strings.Contains(out.String(), "Startup canceled") {
 		t.Fatalf("prompt output = %q", out.String())
+	}
+}
+
+func TestCheckReportsCapabilitiesWithoutCreatingHomeConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	restoreAdapter(t, &fakeAdapter{})
+	var out bytes.Buffer
+
+	if err := Check(&out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".seamless-cors")); !os.IsNotExist(err) {
+		t.Fatalf("check created home config directory: %v", err)
+	}
+	for _, want := range []string{
+		"platform: test/test",
+		"supported: true",
+		"pac-management: supported",
+		"ca-trust-management: supported",
+		"runtime-cleanup: supported",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("check output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestInstallIsConfigIndependentAndIdempotent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	fake := &fakeAdapter{}
+	restoreAdapter(t, fake)
+	var out bytes.Buffer
+
+	if err := Install(&out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".seamless-cors", "config.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("install created config: %v", err)
+	}
+	if fake.trusted != 1 {
+		t.Fatalf("trust calls = %d", fake.trusted)
+	}
+
+	out.Reset()
+	if err := Install(&out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.trusted != 1 {
+		t.Fatalf("idempotent install trust calls = %d", fake.trusted)
+	}
+	if !strings.Contains(out.String(), "Installed User CA is already usable.") {
+		t.Fatalf("idempotent install output = %q", out.String())
+	}
+}
+
+func TestUninstallRefusesWhileGatewayIsRunning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	entry, err := domain.ParseEntry("api.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeAdapter{}
+	restoreAdapter(t, fake)
+	runtime, err := NewRuntime(config.Default(), []domain.Entry{entry}, fake, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runtime.Serve(ctx) }()
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
+
+	var out bytes.Buffer
+	err = Uninstall(&out, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "running") {
+		t.Fatalf("uninstall error = %v", err)
+	}
+	if !strings.Contains(out.String(), "stop it before uninstalling") {
+		t.Fatalf("uninstall output = %q", out.String())
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -144,10 +269,7 @@ func TestRuntimeUsesAdapterAndCleansUpLifecycleState(t *testing.T) {
 	if fake.clearedPAC == 0 {
 		t.Fatalf("PAC cleanup calls = %d", fake.clearedPAC)
 	}
-	if fake.cleanedCA == 0 {
-		t.Fatalf("CA cleanup calls = %d", fake.cleanedCA)
-	}
-	if !strings.Contains(out.String(), "Local CA certificate added to the current user's SSL trust settings.") {
+	if !strings.Contains(out.String(), "Installed User CA added to the current user's SSL trust settings.") {
 		t.Fatalf("success output = %q", out.String())
 	}
 }
@@ -172,7 +294,7 @@ func TestRuntimePrintsCancelMessageWhenTrustApprovalDenied(t *testing.T) {
 	}
 
 	want := "Certificate trust was not approved.\n" +
-		"Run the command again and approve the system prompt, or set ca-trusted: false.\n"
+		"Run the command again and approve the system prompt.\n"
 	if out.String() != want {
 		t.Fatalf("cancel output = %q", out.String())
 	}
@@ -226,7 +348,7 @@ func TestRuntimeWaitsForCATrustApprovalBeforeActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	caIndex := strings.Index(got, "Local CA certificate added")
+	caIndex := strings.Index(got, "Installed User CA added")
 	runningIndex := strings.Index(got, "seamless-cors running")
 	if caIndex < 0 || runningIndex < 0 || caIndex > runningIndex {
 		t.Fatalf("start output order = %q", got)
@@ -328,10 +450,13 @@ func TestStartDeclinedLifecycleConsentDoesNotMutateOSOrRuntimeState(t *testing.T
 	if _, err := os.Stat(filepath.Join(configDir, "runtime", "control-state.json")); !os.IsNotExist(err) {
 		t.Fatalf("declined consent wrote runtime state: %v", err)
 	}
-	for _, want := range []string{"Managed PAC Consent:", "CA Trust Consent:", "without restoring previous PAC state"} {
+	for _, want := range []string{"Managed PAC Consent:", "without restoring previous PAC state"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("consent output missing %q:\n%s", want, out.String())
 		}
+	}
+	if strings.Contains(out.String(), "CA Trust Consent:") {
+		t.Fatalf("CA trust should not use terminal lifecycle consent:\n%s", out.String())
 	}
 }
 
@@ -627,6 +752,7 @@ func TestRuntimeLiveConfigFollowsConfigDomainList(t *testing.T) {
 	cfg := config.Default()
 	cfg.DomainList = firstDomainPath
 	cfg.SourcePath = configPath
+	cfg.CATrusted = false
 	writeConfigForRuntime(t, configPath, cfg)
 
 	entries, errs, err := loadDomainList(firstDomainPath)
@@ -732,6 +858,7 @@ func TestStatusReportsPendingLifecycleChanges(t *testing.T) {
 	cfg := config.Default()
 	cfg.DomainList = domainPath
 	cfg.SourcePath = configPath
+	cfg.CATrusted = false
 	writeConfigForRuntime(t, configPath, cfg)
 	entry, err := domain.ParseEntry("api.example.test")
 	if err != nil {
@@ -769,6 +896,15 @@ func writeConfigForRuntime(t *testing.T, path string, cfg config.Config) {
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func restoreAdapter(t *testing.T, adapter platform.Adapter) {
+	t.Helper()
+	previous := platform.CurrentAdapter
+	platform.CurrentAdapter = adapter
+	t.Cleanup(func() {
+		platform.CurrentAdapter = previous
+	})
 }
 
 func loadDomainList(path string) ([]domain.Entry, []domain.LineError, error) {

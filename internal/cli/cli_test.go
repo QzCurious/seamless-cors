@@ -29,6 +29,26 @@ func TestStartRejectsConfigurationFlags(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsUnexpectedArgs(t *testing.T) {
+	var stderr bytes.Buffer
+
+	err := run([]string{"install", "--help"}, io.Discard, &stderr, commandHandlers{
+		install: func(io.Writer, io.Writer) error {
+			t.Fatal("install handler should not run")
+			return nil
+		},
+	})
+	if err == nil {
+		t.Fatal("expected install arg error")
+	}
+	if !strings.Contains(err.Error(), "install does not accept arguments") {
+		t.Fatalf("error = %v", err)
+	}
+	if !strings.Contains(stderr.String(), "--help") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
 func TestRunPrintsStartCommandErrors(t *testing.T) {
 	wantErr := errors.New("start failed")
 	var stderr bytes.Buffer

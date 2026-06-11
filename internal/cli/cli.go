@@ -3,11 +3,15 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"seamless-cors/internal/app"
 )
 
 const usage = `Usage:
+  seamless-cors check
+  seamless-cors install
+  seamless-cors uninstall
   seamless-cors start
   seamless-cors stop [flags]
   seamless-cors status [flags]
@@ -16,16 +20,22 @@ const usage = `Usage:
 // Run dispatches the v1 Minimal Command Surface.
 func Run(args []string, stdout, stderr io.Writer) error {
 	return run(args, stdout, stderr, commandHandlers{
-		start:  app.Start,
-		stop:   app.Stop,
-		status: app.Status,
+		check:     app.Check,
+		install:   app.Install,
+		uninstall: app.Uninstall,
+		start:     app.Start,
+		stop:      app.Stop,
+		status:    app.Status,
 	})
 }
 
 type commandHandlers struct {
-	start  func(io.Writer, io.Writer) error
-	stop   func(io.Writer, io.Writer) error
-	status func(io.Writer, io.Writer) error
+	check     func(io.Writer, io.Writer) error
+	install   func(io.Writer, io.Writer) error
+	uninstall func(io.Writer, io.Writer) error
+	start     func(io.Writer, io.Writer) error
+	stop      func(io.Writer, io.Writer) error
+	status    func(io.Writer, io.Writer) error
 }
 
 func run(args []string, stdout, stderr io.Writer, commands commandHandlers) error {
@@ -35,6 +45,21 @@ func run(args []string, stdout, stderr io.Writer, commands commandHandlers) erro
 	}
 
 	switch args[0] {
+	case "check":
+		if err := rejectUnexpectedArgs(stderr, "check", args[1:]); err != nil {
+			return err
+		}
+		return reportCommandError(stderr, commands.check(stdout, stderr))
+	case "install":
+		if err := rejectUnexpectedArgs(stderr, "install", args[1:]); err != nil {
+			return err
+		}
+		return reportCommandError(stderr, commands.install(stdout, stderr))
+	case "uninstall":
+		if err := rejectUnexpectedArgs(stderr, "uninstall", args[1:]); err != nil {
+			return err
+		}
+		return reportCommandError(stderr, commands.uninstall(stdout, stderr))
 	case "start":
 		if len(args[1:]) > 0 {
 			err := fmt.Errorf("start does not accept configuration flags; edit config.yaml instead")
@@ -52,6 +77,15 @@ func run(args []string, stdout, stderr io.Writer, commands commandHandlers) erro
 		fmt.Fprint(stderr, usage)
 		return err
 	}
+}
+
+func rejectUnexpectedArgs(stderr io.Writer, command string, args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	err := fmt.Errorf("%s does not accept arguments: %s", command, strings.Join(args, " "))
+	fmt.Fprintln(stderr, err)
+	return err
 }
 
 func reportCommandError(stderr io.Writer, err error) error {

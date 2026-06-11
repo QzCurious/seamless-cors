@@ -29,7 +29,7 @@ type LoadResult struct {
 func Default() Config {
 	return Config{
 		DomainList: "~/.seamless-cors/domains.txt",
-		CATrusted:  false,
+		CATrusted:  true,
 	}
 }
 
@@ -55,6 +55,14 @@ func RuntimeDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, "runtime"), nil
+}
+
+func CADir() (string, error) {
+	home, err := HomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "ca"), nil
 }
 
 func LoadOrBootstrap(configPath string, stdout io.Writer) (LoadResult, error) {
@@ -175,7 +183,7 @@ func commentedDefaultConfig() string {
 	return `# One domain or origin per line.
 domain-list: ~/.seamless-cors/domains.txt
 
-# Opt into HTTPS interception. Generated CA is removed on stop.
-ca-trusted: false
+# Enable trusted HTTPS interception through the Installed User CA.
+ca-trusted: true
 `
 }
