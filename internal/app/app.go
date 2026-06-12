@@ -22,7 +22,6 @@ import (
 	"seamless-cors/internal/config"
 	"seamless-cors/internal/control"
 	"seamless-cors/internal/corsproxy"
-	"seamless-cors/internal/domain"
 	"seamless-cors/internal/liveconfig"
 	"seamless-cors/internal/pacrouting"
 	"seamless-cors/internal/platform"
@@ -139,7 +138,7 @@ func (a Activation) Start(ctx context.Context) error {
 	if err := cleanRuntime(adapter); err != nil {
 		return err
 	}
-	source, snapshot, err := liveconfig.LoadOrBootstrap("", stdout)
+	source, live, err := liveconfig.LoadOrBootstrap("", stdout)
 	if err != nil {
 		return err
 	}
@@ -155,17 +154,17 @@ func (a Activation) Start(ctx context.Context) error {
 		return err
 	}
 
-	runtime, err := NewRuntimeFromLiveConfig(source, snapshot, adapter, stdout)
+	runtime, err := NewRuntimeFromLiveConfig(source, live, adapter, stdout)
 	if err != nil {
 		return err
 	}
 	return a.serveRuntime(ctx, runtime)
 }
 
-func writeStartGuidance(stdout io.Writer, snapshot liveconfig.Snapshot) {
+func writeStartGuidance(stdout io.Writer, live liveconfig.Config) {
 	fmt.Fprintf(stdout, "seamless-cors running\n")
-	fmt.Fprintf(stdout, "config: %s\n", snapshot.ConfigPath)
-	fmt.Fprintf(stdout, "domain-list: %s\n", snapshot.DomainListPath)
+	fmt.Fprintf(stdout, "config: %s\n", live.ConfigPath())
+	fmt.Fprintf(stdout, "domain-list: %s\n", live.DomainListPath())
 	fmt.Fprintln(stdout, "managed-pac: active")
 }
 
@@ -241,44 +240,25 @@ func readYes(stdin io.Reader) (bool, error) {
 }
 
 type Runtime struct {
-	cfg              config.Config
-	entries          []domain.Entry
-	mu               sync.RWMutex
-	adapter          platform.Adapter
-	stdout           io.Writer
-	authority        *ca.Authority
-	proxy            *http.Server
-	pacHandler       *pacrouting.DynamicHandler
-	pac              *http.Server
-	control          *control.Server
-	listeners        []net.Listener
-	token            string
-	runtimeDir       string
-	coord            *runtimecoord.Coordinator
-	liveConfig       *liveconfig.Source
-	pendingLifecycle []string
+	mu         sync.RWMutex
+	live       liveconfig.Config
+	adapter    platform.Adapter
+	stdout     io.Writer
+	authority  *ca.Authority
+	proxy      *http.Server
+	pacHandler *pacrouting.DynamicHandler
+	pac        *http.Server
+	control    *control.Server
+	listeners  []net.Listener
+	token      string
+	runtimeDir string
+	coord      *runtimecoord.Coordinator
+	liveConfig *liveconfig.Source
 }
 
-func NewRuntime(cfg config.Config, entries []domain.Entry, adapter platform.Adapter, stdout io.Writer) (*Runtime, error) {
-	return NewRuntimeFromLiveConfig(liveconfig.NewSource(liveconfig.Snapshot{
-		Config:           cfg,
-		ConfigPath:       cfg.SourcePath,
-		DomainListPath:   cfg.DomainList,
-		Entries:          entries,
-		CATrusted:        cfg.CATrusted,
-		PendingLifecycle: nil,
-	}), liveconfig.Snapshot{
-		Config:         cfg,
-		ConfigPath:     cfg.SourcePath,
-		DomainListPath: cfg.DomainList,
-		Entries:        entries,
-		CATrusted:      cfg.CATrusted,
-	}, adapter, stdout)
-}
-
-func NewRuntimeFromLiveConfig(source *liveconfig.Source, snapshot liveconfig.Snapshot, adapter platform.Adapter, stdout io.Writer) (*Runtime, error) {
-	cfg := activeConfig(snapshot)
-	entries := snapshot.Entries
+func NewRuntimeFromLiveConfig(source *liveconfig.Source, live liveconfig.Config, adapter platform.Adapter, stdout io.Writer) (*Runtime, error) {
+	cfg := live.Effective()
+	entries := live.Entries()
 	if err := config.Validate(cfg); err != nil {
 		return nil, err
 	}
@@ -316,19 +296,19 @@ func NewRuntimeFromLiveConfig(source *liveconfig.Source, snapshot liveconfig.Sna
 	pacListen := pacListener.Addr().String()
 	controlListen := controlListener.Addr().String()
 
-	pacBody := pacrouting.Generate(pacrouting.Options{ProxyListen: proxyListen, CATrusted: cfg.CATrusted, Entries: entries})
+	pacBody := pacrouting.Generate(pacrouting.Options{ProxyListen: proxyListen, CATrusted: live.CATrusted(), Entries: entries})
 	pacHandler := pacrouting.NewDynamicHandler(pacBody)
 	controlServer := control.New(control.State{
-		ProxyListen:   proxyListen,
-		PACListen:     pacListen,
-		ControlListen: controlListen,
-		DomainList:    cfg.DomainList,
-		CATrusted:     cfg.CATrusted,
-		DomainCount:   len(entries),
+		ProxyListen:      proxyListen,
+		PACListen:        pacListen,
+		ControlListen:    controlListen,
+		DomainList:       live.DomainListPath(),
+		CATrusted:        live.CATrusted(),
+		DomainCount:      len(entries),
+		PendingLifecycle: live.PendingLifecycle(),
 	}, token)
 	return &Runtime{
-		cfg:        cfg,
-		entries:    entries,
+		live:       live,
 		adapter:    adapter,
 		stdout:     stdout,
 		liveConfig: source,
@@ -353,7 +333,7 @@ func (a Activation) serveRuntime(ctx context.Context, r *Runtime) error {
 		return err
 	}
 
-	if r.cfg.CATrusted {
+	if r.live.CATrusted() {
 		caDir, err := config.CADir()
 		if err != nil {
 			r.Close()
@@ -377,7 +357,7 @@ func (a Activation) serveRuntime(ctx context.Context, r *Runtime) error {
 		}
 	}
 	proxyHandler, err := corsproxy.New(corsproxy.Options{
-		CATrusted: r.cfg.CATrusted,
+		CATrusted: r.live.CATrusted(),
 		Authority: r.authority,
 	})
 	if err != nil {
@@ -402,10 +382,7 @@ func (a Activation) serveRuntime(ctx context.Context, r *Runtime) error {
 	go r.watchLiveConfig(ctx, errs)
 	go func() { errs <- r.proxy.Serve(r.listeners[0]) }()
 	go func() { errs <- r.pac.Serve(r.listeners[1]) }()
-	writeStartGuidance(r.stdout, liveconfig.Snapshot{
-		ConfigPath:     r.cfg.SourcePath,
-		DomainListPath: r.cfg.DomainList,
-	})
+	writeStartGuidance(r.stdout, r.live)
 
 	select {
 	case <-ctx.Done():
@@ -517,31 +494,22 @@ func (r *Runtime) watchLiveConfig(ctx context.Context, errs chan<- error) {
 				}
 				return
 			}
-			r.applyLiveConfig(event.Snapshot)
+			r.applyLiveConfig(event.Config)
 		}
 	}
 }
 
-func (r *Runtime) applyLiveConfig(snapshot liveconfig.Snapshot) {
+func (r *Runtime) applyLiveConfig(live liveconfig.Config) {
 	r.mu.Lock()
-	r.cfg = activeConfig(snapshot)
-	r.entries = snapshot.Entries
-	r.pendingLifecycle = snapshot.PendingLifecycle
+	r.live = live
 	state := r.controlStateLocked()
 	r.mu.Unlock()
 	r.pacHandler.Set(pacrouting.Generate(pacrouting.Options{
 		ProxyListen: r.listeners[0].Addr().String(),
-		CATrusted:   snapshot.CATrusted,
-		Entries:     snapshot.Entries,
+		CATrusted:   live.CATrusted(),
+		Entries:     live.Entries(),
 	}))
 	r.control.SetState(state)
-}
-
-func activeConfig(snapshot liveconfig.Snapshot) config.Config {
-	cfg := snapshot.Config
-	cfg.DomainList = snapshot.DomainListPath
-	cfg.CATrusted = snapshot.CATrusted
-	return cfg
 }
 
 func (r *Runtime) controlState() control.State {
@@ -551,14 +519,15 @@ func (r *Runtime) controlState() control.State {
 }
 
 func (r *Runtime) controlStateLocked() control.State {
+	entries := r.live.Entries()
 	return control.State{
 		ProxyListen:      r.listeners[0].Addr().String(),
 		PACListen:        r.listeners[1].Addr().String(),
 		ControlListen:    r.listeners[2].Addr().String(),
-		DomainList:       r.cfg.DomainList,
-		CATrusted:        r.cfg.CATrusted,
-		DomainCount:      len(r.entries),
-		PendingLifecycle: append([]string(nil), r.pendingLifecycle...),
+		DomainList:       r.live.DomainListPath(),
+		CATrusted:        r.live.CATrusted(),
+		DomainCount:      len(entries),
+		PendingLifecycle: r.live.PendingLifecycle(),
 	}
 }
 

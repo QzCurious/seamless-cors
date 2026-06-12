@@ -1,18 +1,18 @@
-package liveconfig
+package liveconfig_test
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"seamless-cors/internal/config"
-	"seamless-cors/internal/domain"
+	"seamless-cors/internal/liveconfig"
 )
 
-func TestWatchEmitsParsedSnapshotAndKeepsLifecycleChangesPending(t *testing.T) {
+func TestWatchEmitsEffectiveConfigAndKeepsLifecycleChangesPending(t *testing.T) {
 	home := t.TempDir()
 	firstDomainPath := filepath.Join(home, "first-domains.txt")
 	secondDomainPath := filepath.Join(home, "second-domains.txt")
@@ -21,21 +21,13 @@ func TestWatchEmitsParsedSnapshotAndKeepsLifecycleChangesPending(t *testing.T) {
 	writeFile(t, secondDomainPath, "second.example.test\n")
 	writeConfig(t, configPath, firstDomainPath, false)
 
-	entries, errs := domain.ParseList("first.example.test\n")
-	if len(errs) > 0 {
-		t.Fatalf("domain errors = %v", errs)
+	source, initial, err := liveconfig.LoadOrBootstrap(configPath, io.Discard)
+	if err != nil {
+		t.Fatal(err)
 	}
-	source := NewSource(Snapshot{
-		Config: config.Config{
-			DomainList: firstDomainPath,
-			CATrusted:  false,
-			SourcePath: configPath,
-		},
-		ConfigPath:     configPath,
-		DomainListPath: firstDomainPath,
-		Entries:        entries,
-		CATrusted:      false,
-	})
+	if initial.CATrusted() {
+		t.Fatal("initial CA trust = true")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -46,25 +38,27 @@ func TestWatchEmitsParsedSnapshotAndKeepsLifecycleChangesPending(t *testing.T) {
 	if event.Err != nil {
 		t.Fatal(event.Err)
 	}
-	if event.Snapshot.DomainListPath != secondDomainPath {
-		t.Fatalf("domain list path = %q", event.Snapshot.DomainListPath)
+	live := event.Config
+	if live.DomainListPath() != secondDomainPath {
+		t.Fatalf("domain list path = %q", live.DomainListPath())
 	}
-	if len(event.Snapshot.Entries) != 1 || event.Snapshot.Entries[0].Host != "second.example.test" {
-		t.Fatalf("entries = %#v", event.Snapshot.Entries)
+	entries := live.Entries()
+	if len(entries) != 1 || entries[0].Host != "second.example.test" {
+		t.Fatalf("entries = %#v", entries)
 	}
-	if event.Snapshot.CATrusted {
+	if live.CATrusted() {
 		t.Fatal("restart-applied CA trust was hot-applied")
 	}
-	if !event.Snapshot.Config.CATrusted {
-		t.Fatal("desired CA trust was not retained in Explicit Configuration")
+	if live.Effective().CATrusted {
+		t.Fatal("effective config exposed desired CA trust")
 	}
-	if got := strings.Join(event.Snapshot.PendingLifecycle, ","); got != "ca-trusted" {
+	if got := strings.Join(live.PendingLifecycle(), ","); got != "ca-trusted" {
 		t.Fatalf("pending lifecycle = %q", got)
 	}
 
-	cached := source.Snapshot()
-	if cached.DomainListPath != secondDomainPath {
-		t.Fatalf("cached domain list path = %q", cached.DomainListPath)
+	cached := source.Config()
+	if cached.DomainListPath() != secondDomainPath {
+		t.Fatalf("cached domain list path = %q", cached.DomainListPath())
 	}
 
 	writeFile(t, secondDomainPath, "second-updated.example.test\n")
@@ -72,34 +66,37 @@ func TestWatchEmitsParsedSnapshotAndKeepsLifecycleChangesPending(t *testing.T) {
 	if event.Err != nil {
 		t.Fatal(event.Err)
 	}
-	if event.Snapshot.CATrusted {
+	live = event.Config
+	if live.CATrusted() {
 		t.Fatal("Domain List reload hot-applied CA trust")
 	}
-	if !event.Snapshot.Config.CATrusted {
-		t.Fatal("Domain List reload lost desired CA trust")
+	if live.Effective().CATrusted {
+		t.Fatal("Domain List reload exposed desired CA trust")
 	}
-	if got := strings.Join(event.Snapshot.PendingLifecycle, ","); got != "ca-trusted" {
+	if got := strings.Join(live.PendingLifecycle(), ","); got != "ca-trusted" {
 		t.Fatalf("pending lifecycle after Domain List reload = %q", got)
+	}
+
+	writeConfig(t, configPath, secondDomainPath, false)
+	event = waitForEvent(t, events)
+	if event.Err != nil {
+		t.Fatal(event.Err)
+	}
+	if got := strings.Join(event.Config.PendingLifecycle(), ","); got != "" {
+		t.Fatalf("pending lifecycle after revert = %q", got)
 	}
 }
 
-func TestWatchEmitsErrorWithoutReplacingCachedSnapshot(t *testing.T) {
+func TestWatchEmitsErrorWithoutReplacingCachedConfig(t *testing.T) {
 	home := t.TempDir()
 	domainPath := filepath.Join(home, "domains.txt")
+	configPath := filepath.Join(home, "config.yaml")
 	writeFile(t, domainPath, "first.example.test\n")
-	entries, errs := domain.ParseList("first.example.test\n")
-	if len(errs) > 0 {
-		t.Fatalf("domain errors = %v", errs)
+	writeConfig(t, configPath, domainPath, false)
+	source, _, err := liveconfig.LoadOrBootstrap(configPath, io.Discard)
+	if err != nil {
+		t.Fatal(err)
 	}
-	source := NewSource(Snapshot{
-		Config: config.Config{
-			DomainList: domainPath,
-			CATrusted:  false,
-		},
-		DomainListPath: domainPath,
-		Entries:        entries,
-		CATrusted:      false,
-	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -110,9 +107,57 @@ func TestWatchEmitsErrorWithoutReplacingCachedSnapshot(t *testing.T) {
 	if event.Err == nil || !strings.Contains(event.Err.Error(), "Fatal Domain List Error") {
 		t.Fatalf("event error = %v", event.Err)
 	}
-	cached := source.Snapshot()
-	if len(cached.Entries) != 1 || cached.Entries[0].Host != "first.example.test" {
-		t.Fatalf("cached entries = %#v", cached.Entries)
+	cached := source.Config()
+	entries := cached.Entries()
+	if len(entries) != 1 || entries[0].Host != "first.example.test" {
+		t.Fatalf("cached entries = %#v", entries)
+	}
+}
+
+func TestWatchTreatsMissingLiveDomainListAsFatal(t *testing.T) {
+	home := t.TempDir()
+	firstDomainPath := filepath.Join(home, "first-domains.txt")
+	missingDomainPath := filepath.Join(home, "missing-domains.txt")
+	configPath := filepath.Join(home, "config.yaml")
+	writeFile(t, firstDomainPath, "first.example.test\n")
+	writeConfig(t, configPath, firstDomainPath, false)
+	source, _, err := liveconfig.LoadOrBootstrap(configPath, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := source.Watch(ctx, 10*time.Millisecond)
+
+	writeConfig(t, configPath, missingDomainPath, false)
+	event := waitForEvent(t, events)
+	if event.Err == nil || !strings.Contains(event.Err.Error(), "Fatal Domain List Error") {
+		t.Fatalf("event error = %v", event.Err)
+	}
+}
+
+func TestWatchTreatsUnreadableLiveConfigAsFatal(t *testing.T) {
+	home := t.TempDir()
+	domainPath := filepath.Join(home, "domains.txt")
+	configPath := filepath.Join(home, "config.yaml")
+	writeFile(t, domainPath, "first.example.test\n")
+	writeConfig(t, configPath, domainPath, false)
+	source, _, err := liveconfig.LoadOrBootstrap(configPath, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := source.Watch(ctx, 10*time.Millisecond)
+
+	if err := os.Remove(configPath); err != nil {
+		t.Fatal(err)
+	}
+	event := waitForEvent(t, events)
+	if event.Err == nil || !strings.Contains(event.Err.Error(), "Fatal Config Error") {
+		t.Fatalf("event error = %v", event.Err)
 	}
 }
 
@@ -128,7 +173,7 @@ func writeFile(t *testing.T, path, contents string) {
 	}
 }
 
-func waitForEvent(t *testing.T, events <-chan Event) Event {
+func waitForEvent(t *testing.T, events <-chan liveconfig.Event) liveconfig.Event {
 	t.Helper()
 	select {
 	case event, ok := <-events:
@@ -138,6 +183,6 @@ func waitForEvent(t *testing.T, events <-chan Event) Event {
 		return event
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for event")
-		return Event{}
+		return liveconfig.Event{}
 	}
 }

@@ -13,64 +13,67 @@ import (
 	"seamless-cors/internal/domain"
 )
 
-type Snapshot struct {
-	Config           config.Config
-	ConfigPath       string
-	DomainListPath   string
-	Entries          []domain.Entry
-	CATrusted        bool
-	PendingLifecycle []string
+type Config struct {
+	effective        config.Config
+	configPath       string
+	domainListPath   string
+	entries          []domain.Entry
+	pendingLifecycle []string
 }
 
 type Event struct {
-	Snapshot Snapshot
-	Err      error
+	Config Config
+	Err    error
 }
 
 type Source struct {
 	mu                sync.RWMutex
-	snapshot          Snapshot
+	config            Config
+	desiredConfig     config.Config
 	baselineCATrusted bool
 	lastConfigText    string
 	lastDomainText    string
 }
 
-func LoadOrBootstrap(configPath string, stdout io.Writer) (*Source, Snapshot, error) {
+func LoadOrBootstrap(configPath string, stdout io.Writer) (*Source, Config, error) {
 	loaded, err := config.LoadOrBootstrap(configPath, stdout)
 	if err != nil {
-		return nil, Snapshot{}, err
+		return nil, Config{}, err
 	}
 	entries, domainText, err := loadDomainList(loaded.DomainPath)
 	if err != nil {
-		return nil, Snapshot{}, err
+		return nil, Config{}, err
 	}
-	snapshot := snapshotFromLoadResult(loaded, entries, nil, loaded.Config.CATrusted)
-	source := NewSource(snapshot)
-	source.lastConfigText, _ = readText(loaded.ConfigPath)
-	source.lastDomainText = domainText
-	return source, snapshot, nil
+	configText, err := readText(loaded.ConfigPath)
+	if err != nil {
+		return nil, Config{}, err
+	}
+	live := configFromLoadResult(loaded, entries, nil, loaded.Config.CATrusted)
+	source := newSource(loaded.Config, live, configText, domainText)
+	return source, live, nil
 }
 
-func NewSource(snapshot Snapshot) *Source {
-	snapshot = cloneSnapshot(snapshot)
-	snapshot.CATrusted = snapshot.Config.CATrusted
-	snapshot.DomainListPath = snapshot.Config.DomainList
+func newSource(desired config.Config, live Config, configText, domainText string) *Source {
+	live = cloneConfig(live)
 	return &Source{
-		snapshot:          snapshot,
-		baselineCATrusted: snapshot.Config.CATrusted,
+		config:            live,
+		desiredConfig:     desired,
+		baselineCATrusted: live.CATrusted(),
+		lastConfigText:    configText,
+		lastDomainText:    domainText,
 	}
 }
 
-func (s *Source) Snapshot() Snapshot {
+func (s *Source) Config() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return cloneSnapshot(s.snapshot)
+	return cloneConfig(s.config)
 }
 
 func (s *Source) Watch(ctx context.Context, interval time.Duration) <-chan Event {
 	events := make(chan Event, 1)
-	snapshot := s.Snapshot()
-	if snapshot.ConfigPath == "" && snapshot.DomainListPath == "" {
+	live := s.Config()
+	if live.ConfigPath() == "" && live.DomainListPath() == "" {
 		close(events)
 		return events
 	}
@@ -104,38 +107,41 @@ func (s *Source) watch(ctx context.Context, interval time.Duration, events chan<
 }
 
 func (s *Source) poll() (Event, bool) {
-	current := s.Snapshot()
+	current := s.Config()
 	var configText string
 	var configChanged bool
-	if current.ConfigPath != "" {
+	if current.ConfigPath() != "" {
 		var configErr error
-		configText, configErr = readText(current.ConfigPath)
+		configText, configErr = readText(current.ConfigPath())
 		if configErr != nil {
-			return Event{}, false
+			return Event{Err: fmt.Errorf("Fatal Config Error: %w", configErr)}, true
 		}
 		configChanged = configText != s.lastConfigText
 	}
-	domainPath := current.DomainListPath
+	domainPath := current.DomainListPath()
 	var loaded config.LoadResult
 	if configChanged {
 		var err error
-		loaded, err = config.LoadExisting(current.ConfigPath)
+		loaded, err = config.LoadExisting(current.ConfigPath())
 		if err != nil {
 			return Event{Err: fmt.Errorf("Fatal Config Error: %w", err)}, true
 		}
 		domainPath = loaded.DomainPath
 	} else {
+		s.mu.RLock()
+		desired := s.desiredConfig
+		s.mu.RUnlock()
 		loaded = config.LoadResult{
-			Config:     current.Config,
-			ConfigPath: current.ConfigPath,
-			DomainPath: current.DomainListPath,
+			Config:     desired,
+			ConfigPath: current.ConfigPath(),
+			DomainPath: current.DomainListPath(),
 		}
 	}
 	domainText, domainErr := readText(domainPath)
 	if domainErr != nil {
-		return Event{}, false
+		return Event{Err: fmt.Errorf("Fatal Domain List Error: %w", domainErr)}, true
 	}
-	domainChanged := domainText != s.lastDomainText || domainPath != current.DomainListPath
+	domainChanged := domainText != s.lastDomainText || domainPath != current.DomainListPath()
 	if !configChanged && !domainChanged {
 		return Event{}, false
 	}
@@ -143,23 +149,27 @@ func (s *Source) poll() (Event, bool) {
 	if len(errs) > 0 {
 		return Event{Err: fmt.Errorf("Fatal Domain List Error: invalid Domain List:\n%s", formatDomainErrors(errs))}, true
 	}
-	next := snapshotFromLoadResult(loaded, entries, lifecycleChanges(loaded.Config.CATrusted, s.baselineCATrusted), s.baselineCATrusted)
+	next := configFromLoadResult(loaded, entries, lifecycleChanges(loaded.Config.CATrusted, s.baselineCATrusted), s.baselineCATrusted)
 	s.mu.Lock()
-	s.snapshot = next
+	s.config = next
+	s.desiredConfig = loaded.Config
 	s.lastConfigText = configText
 	s.lastDomainText = domainText
 	s.mu.Unlock()
-	return Event{Snapshot: cloneSnapshot(next)}, true
+	return Event{Config: cloneConfig(next)}, true
 }
 
-func snapshotFromLoadResult(loaded config.LoadResult, entries []domain.Entry, pending []string, activeCATrusted bool) Snapshot {
-	return Snapshot{
-		Config:           loaded.Config,
-		ConfigPath:       loaded.ConfigPath,
-		DomainListPath:   loaded.DomainPath,
-		Entries:          append([]domain.Entry(nil), entries...),
-		CATrusted:        activeCATrusted,
-		PendingLifecycle: append([]string(nil), pending...),
+func configFromLoadResult(loaded config.LoadResult, entries []domain.Entry, pending []string, activeCATrusted bool) Config {
+	effective := loaded.Config
+	effective.SourcePath = loaded.ConfigPath
+	effective.DomainList = loaded.DomainPath
+	effective.CATrusted = activeCATrusted
+	return Config{
+		effective:        effective,
+		configPath:       loaded.ConfigPath,
+		domainListPath:   loaded.DomainPath,
+		entries:          append([]domain.Entry(nil), entries...),
+		pendingLifecycle: append([]string(nil), pending...),
 	}
 }
 
@@ -198,8 +208,32 @@ func formatDomainErrors(errs []domain.LineError) string {
 	return strings.Join(lines, "\n")
 }
 
-func cloneSnapshot(snapshot Snapshot) Snapshot {
-	snapshot.Entries = append([]domain.Entry(nil), snapshot.Entries...)
-	snapshot.PendingLifecycle = append([]string(nil), snapshot.PendingLifecycle...)
-	return snapshot
+func (c Config) Effective() config.Config {
+	return c.effective
+}
+
+func (c Config) CATrusted() bool {
+	return c.effective.CATrusted
+}
+
+func (c Config) Entries() []domain.Entry {
+	return append([]domain.Entry(nil), c.entries...)
+}
+
+func (c Config) PendingLifecycle() []string {
+	return append([]string(nil), c.pendingLifecycle...)
+}
+
+func (c Config) ConfigPath() string {
+	return c.configPath
+}
+
+func (c Config) DomainListPath() string {
+	return c.domainListPath
+}
+
+func cloneConfig(live Config) Config {
+	live.entries = append([]domain.Entry(nil), live.entries...)
+	live.pendingLifecycle = append([]string(nil), live.pendingLifecycle...)
+	return live
 }

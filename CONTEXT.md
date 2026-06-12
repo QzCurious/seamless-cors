@@ -125,7 +125,7 @@ A lifecycle default where generated configuration starts with `ca-trusted: true`
 _Avoid_: silent trust installation, disabled-by-default HTTPS interception, config-only trust
 
 **Live Configuration**:
-A gateway behavior where request handling uses the newest available request policy without requiring the user to manually restart or reload the program.
+A gateway behavior where hot-applicable user request settings use the newest valid Explicit Configuration and Domain List without requiring the user to manually restart or reload the program.
 _Avoid_: manual reload, restart requirement, stale configuration
 
 **All-Or-Nothing Config**:
@@ -137,7 +137,7 @@ A clean-break configuration behavior where only current settings affect gateway 
 _Avoid_: backward-compatible alias, migration, obsolete-setting special case
 
 **Fatal Config Error**:
-A configuration behavior where an invalid config file causes the gateway to report the validation problem, perform Runtime Cleanup, and stop.
+A configuration behavior where an invalid, missing, or unreadable config file causes the gateway to report the validation problem, perform Runtime Cleanup, and stop.
 _Avoid_: silent config fallback, stale config after invalid edit
 
 **Lifecycle Operation**:
@@ -337,7 +337,7 @@ A startup validation behavior where a Domain List with invalid lines fails befor
 _Avoid_: silent invalid entry, invalid-as-empty, partial startup warning
 
 **Fatal Domain List Error**:
-A live configuration behavior where an invalid Domain List edit reports the line-level validation problem, performs Runtime Cleanup, and stops the gateway.
+A live configuration behavior where an invalid, missing, or unreadable Domain List edit reports the validation problem, performs Runtime Cleanup, and stops the gateway.
 _Avoid_: stale valid routing, partial valid routing, silent invalid entry
 
 **Domain List Entry**:

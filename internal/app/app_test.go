@@ -17,7 +17,6 @@ import (
 	"seamless-cors/internal/ca"
 	"seamless-cors/internal/config"
 	"seamless-cors/internal/control"
-	"seamless-cors/internal/domain"
 	"seamless-cors/internal/liveconfig"
 	"seamless-cors/internal/platform"
 	"seamless-cors/internal/runtimecoord"
@@ -90,19 +89,22 @@ func (f *fakeAdapter) RemoveCAs([]string) error {
 }
 
 func TestStartGuidanceShowsEditableFilesAndManagedPAC(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	cfg := config.Default()
+	configPath := filepath.Join(home, ".seamless-cors", "config.yaml")
+	domainPath := filepath.Join(home, ".seamless-cors", "domains.txt")
+	cfg.SourcePath = configPath
+	cfg.DomainList = domainPath
+	_, live := loadLiveConfigForTest(t, cfg, "")
 	var out bytes.Buffer
 
-	writeStartGuidance(&out, liveconfig.Snapshot{
-		Config:         cfg,
-		ConfigPath:     "/Users/example/.seamless-cors/config.yaml",
-		DomainListPath: "/Users/example/.seamless-cors/domains.txt",
-	})
+	writeStartGuidance(&out, live)
 
 	got := out.String()
 	want := "seamless-cors running\n" +
-		"config: /Users/example/.seamless-cors/config.yaml\n" +
-		"domain-list: /Users/example/.seamless-cors/domains.txt\n" +
+		"config: " + configPath + "\n" +
+		"domain-list: " + domainPath + "\n" +
 		"managed-pac: active\n"
 	if got != want {
 		t.Fatalf("start guidance = %q", got)
@@ -210,13 +212,9 @@ func TestInstallIsConfigIndependentAndIdempotent(t *testing.T) {
 func TestUninstallRefusesWhileGatewayIsRunning(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	entry, err := domain.ParseEntry("api.example.test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	fake := &fakeAdapter{}
 	restoreAdapter(t, fake)
-	runtime, err := NewRuntime(config.Default(), []domain.Entry{entry}, fake, &bytes.Buffer{})
+	runtime, err := newRuntimeForTest(t, config.Default(), "api.example.test\n", fake, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,13 +470,9 @@ func TestStartDeclinedLifecycleConsentDoesNotMutateOSOrRuntimeState(t *testing.T
 func TestStartWithVerifiedActiveGatewaySkipsCleanupAndConfigValidation(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	entry, err := domain.ParseEntry("api.example.test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	cfg := config.Default()
 	firstAdapter := &fakeAdapter{}
-	first, err := NewRuntime(cfg, []domain.Entry{entry}, firstAdapter, &bytes.Buffer{})
+	first, err := newRuntimeForTest(t, cfg, "api.example.test\n", firstAdapter, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,13 +574,9 @@ func TestStopCleansStaleRuntimeState(t *testing.T) {
 func TestRuntimeRejectsSecondUserInstance(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	entry, err := domain.ParseEntry("api.example.test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	cfg := config.Default()
 
-	first, err := NewRuntime(cfg, []domain.Entry{entry}, &fakeAdapter{}, &bytes.Buffer{})
+	first, err := newRuntimeForTest(t, cfg, "api.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,7 +587,7 @@ func TestRuntimeRejectsSecondUserInstance(t *testing.T) {
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
 	waitForStatusOutput(t, "seamless-cors status: running")
 
-	second, err := NewRuntime(cfg, []domain.Entry{entry}, &fakeAdapter{}, &bytes.Buffer{})
+	second, err := newRuntimeForTest(t, cfg, "api.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,20 +606,10 @@ func TestRuntimeReloadsDomainListIntoGeneratedPAC(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	domainPath := filepath.Join(home, "domains.txt")
-	if err := os.WriteFile(domainPath, []byte("api-one.example.test\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	entries, errs, err := loadDomainList(domainPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(errs) != 0 {
-		t.Fatalf("domain errors = %v", errs)
-	}
 	cfg := config.Default()
 	cfg.DomainList = domainPath
 
-	runtime, err := NewRuntime(cfg, entries, &fakeAdapter{}, &bytes.Buffer{})
+	runtime, err := newRuntimeForTest(t, cfg, "api-one.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -657,20 +637,10 @@ func TestRuntimeStopsOnInvalidLiveDomainList(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	domainPath := filepath.Join(home, "domains.txt")
-	if err := os.WriteFile(domainPath, []byte("api-one.example.test\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	entries, errs, err := loadDomainList(domainPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(errs) != 0 {
-		t.Fatalf("domain errors = %v", errs)
-	}
 	cfg := config.Default()
 	cfg.DomainList = domainPath
 
-	runtime, err := NewRuntime(cfg, entries, &fakeAdapter{}, &bytes.Buffer{})
+	runtime, err := newRuntimeForTest(t, cfg, "api-one.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -702,20 +672,10 @@ func TestRuntimeAppliesEmptyLiveDomainList(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	domainPath := filepath.Join(home, "domains.txt")
-	if err := os.WriteFile(domainPath, []byte("api-one.example.test\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	entries, errs, err := loadDomainList(domainPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(errs) != 0 {
-		t.Fatalf("domain errors = %v", errs)
-	}
 	cfg := config.Default()
 	cfg.DomainList = domainPath
 
-	runtime, err := NewRuntime(cfg, entries, &fakeAdapter{}, &bytes.Buffer{})
+	runtime, err := newRuntimeForTest(t, cfg, "api-one.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -764,14 +724,7 @@ func TestRuntimeLiveConfigFollowsConfigDomainList(t *testing.T) {
 	cfg.CATrusted = false
 	writeConfigForRuntime(t, configPath, cfg)
 
-	entries, errs, err := loadDomainList(firstDomainPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(errs) != 0 {
-		t.Fatalf("domain errors = %v", errs)
-	}
-	runtime, err := NewRuntime(cfg, entries, &fakeAdapter{}, &bytes.Buffer{})
+	runtime, err := newRuntimeForTest(t, cfg, "first.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -824,15 +777,11 @@ func TestRuntimeStopsOnInvalidLiveConfig(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte("domain-list: "+domainPath+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	entry, err := domain.ParseEntry("api.example.test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	cfg := config.Default()
 	cfg.DomainList = domainPath
 	cfg.SourcePath = configPath
 
-	runtime, err := NewRuntime(cfg, []domain.Entry{entry}, &fakeAdapter{}, &bytes.Buffer{})
+	runtime, err := newRuntimeForTest(t, cfg, "api.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -869,12 +818,8 @@ func TestStatusReportsPendingLifecycleChanges(t *testing.T) {
 	cfg.SourcePath = configPath
 	cfg.CATrusted = false
 	writeConfigForRuntime(t, configPath, cfg)
-	entry, err := domain.ParseEntry("api.example.test")
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	runtime, err := NewRuntime(cfg, []domain.Entry{entry}, &fakeAdapter{}, &bytes.Buffer{})
+	runtime, err := newRuntimeForTest(t, cfg, "api.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -898,6 +843,49 @@ func TestStatusReportsPendingLifecycleChanges(t *testing.T) {
 	}
 }
 
+func newRuntimeForTest(t *testing.T, cfg config.Config, domainText string, adapter platform.Adapter, stdout io.Writer) (*Runtime, error) {
+	t.Helper()
+	source, live := loadLiveConfigForTest(t, cfg, domainText)
+	return NewRuntimeFromLiveConfig(source, live, adapter, stdout)
+}
+
+func loadLiveConfigForTest(t *testing.T, cfg config.Config, domainText string) (*liveconfig.Source, liveconfig.Config) {
+	t.Helper()
+	if cfg.SourcePath == "" {
+		configPath, err := config.DefaultConfigPath()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.SourcePath = configPath
+	}
+	if cfg.DomainList == "" {
+		cfg.DomainList = config.Default().DomainList
+	}
+	domainPath, err := config.ExpandPath(cfg.DomainList)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.SourcePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(domainPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if domainText == "" {
+		domainText = "# no active domains\n"
+	}
+	if err := os.WriteFile(domainPath, []byte(domainText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.DomainList = domainPath
+	writeConfigForRuntime(t, cfg.SourcePath, cfg)
+	source, live, err := liveconfig.LoadOrBootstrap(cfg.SourcePath, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return source, live
+}
+
 func writeConfigForRuntime(t *testing.T, path string, cfg config.Config) {
 	t.Helper()
 	text := "domain-list: " + cfg.DomainList + "\n" +
@@ -914,15 +902,6 @@ func restoreAdapter(t *testing.T, adapter platform.Adapter) {
 	t.Cleanup(func() {
 		platform.CurrentAdapter = previous
 	})
-}
-
-func loadDomainList(path string) ([]domain.Entry, []domain.LineError, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	entries, errs := domain.ParseList(string(data))
-	return entries, errs, nil
 }
 
 func writeStaleRuntimeState(t *testing.T) string {
