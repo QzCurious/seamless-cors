@@ -105,6 +105,28 @@ func Uninstall(stdout, _ io.Writer) error {
 }
 
 func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Writer, adapter platform.Adapter) error {
+	return Activation{
+		Stdin:   stdin,
+		Stdout:  stdout,
+		Adapter: adapter,
+	}.Start(ctx)
+}
+
+type Activation struct {
+	Stdin   io.Reader
+	Stdout  io.Writer
+	Adapter platform.Adapter
+}
+
+func (a Activation) Start(ctx context.Context) error {
+	stdout := a.Stdout
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	adapter := a.Adapter
+	if adapter == nil {
+		adapter = platform.CurrentAdapter
+	}
 	if err := requireSupported(adapter.Capabilities()); err != nil {
 		return err
 	}
@@ -129,7 +151,7 @@ func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Wr
 		ManagedPAC:      platform.HasForeignEnabledPACState(pacStates),
 		CurrentPACState: pacStates,
 	}
-	if err := promptForLifecycleConsent(stdin, stdout, consent); err != nil {
+	if err := promptForLifecycleConsent(a.Stdin, stdout, consent); err != nil {
 		return err
 	}
 
@@ -137,7 +159,7 @@ func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Wr
 	if err != nil {
 		return err
 	}
-	return runtime.Serve(ctx)
+	return a.serveRuntime(ctx, runtime)
 }
 
 func writeStartGuidance(stdout io.Writer, snapshot liveconfig.Snapshot) {
@@ -322,6 +344,10 @@ func NewRuntimeFromLiveConfig(source *liveconfig.Source, snapshot liveconfig.Sna
 }
 
 func (r *Runtime) Serve(ctx context.Context) error {
+	return Activation{Adapter: r.adapter, Stdout: r.stdout}.serveRuntime(ctx, r)
+}
+
+func (a Activation) serveRuntime(ctx context.Context, r *Runtime) error {
 	if err := r.ensureSingleInstance(); err != nil {
 		r.Close()
 		return err

@@ -241,23 +241,27 @@ func TestUninstallRefusesWhileGatewayIsRunning(t *testing.T) {
 	}
 }
 
-func TestRuntimeUsesAdapterAndCleansUpLifecycleState(t *testing.T) {
-	entry, err := domain.ParseEntry("api.example.test")
-	if err != nil {
+func TestActivationUsesAdapterAndCleansUpLifecycleState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".seamless-cors")
+	domainPath := filepath.Join(configDir, "domains.txt")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Default()
-	cfg.CATrusted = true
+	writeConfigForRuntime(t, filepath.Join(configDir, "config.yaml"), config.Config{
+		DomainList: domainPath,
+		CATrusted:  true,
+	})
+	if err := os.WriteFile(domainPath, []byte("api.example.test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	fake := &fakeAdapter{}
 	var out bytes.Buffer
-	runtime, err := NewRuntime(cfg, []domain.Entry{entry}, fake, &out)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := runtime.Serve(ctx); err != nil {
+	if err := (Activation{Adapter: fake, Stdout: &out}).Start(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -275,21 +279,25 @@ func TestRuntimeUsesAdapterAndCleansUpLifecycleState(t *testing.T) {
 	}
 }
 
-func TestRuntimePrintsCancelMessageWhenTrustApprovalDenied(t *testing.T) {
-	entry, err := domain.ParseEntry("api.example.test")
-	if err != nil {
+func TestActivationPrintsCancelMessageWhenTrustApprovalDenied(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".seamless-cors")
+	domainPath := filepath.Join(configDir, "domains.txt")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Default()
-	cfg.CATrusted = true
+	writeConfigForRuntime(t, filepath.Join(configDir, "config.yaml"), config.Config{
+		DomainList: domainPath,
+		CATrusted:  true,
+	})
+	if err := os.WriteFile(domainPath, []byte("api.example.test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	fake := &fakeAdapter{trustErr: platform.ErrTrustApprovalDenied}
 	var out bytes.Buffer
-	runtime, err := NewRuntime(cfg, []domain.Entry{entry}, fake, &out)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	err = runtime.Serve(context.Background())
+	err := (Activation{Adapter: fake, Stdout: &out}).Start(context.Background())
 	if !errors.Is(err, platform.ErrTrustApprovalDenied) {
 		t.Fatalf("serve error = %v", err)
 	}
@@ -304,31 +312,31 @@ func TestRuntimePrintsCancelMessageWhenTrustApprovalDenied(t *testing.T) {
 	}
 }
 
-func TestRuntimeWaitsForCATrustApprovalBeforeActivation(t *testing.T) {
+func TestActivationWaitsForCATrustApprovalBeforeActivation(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	entry, err := domain.ParseEntry("api.example.test")
-	if err != nil {
+	configDir := filepath.Join(home, ".seamless-cors")
+	domainPath := filepath.Join(configDir, "domains.txt")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Default()
-	cfg.CATrusted = true
-	cfg.SourcePath = filepath.Join(home, ".seamless-cors", "config.yaml")
-	cfg.DomainList = filepath.Join(home, ".seamless-cors", "domains.txt")
+	writeConfigForRuntime(t, filepath.Join(configDir, "config.yaml"), config.Config{
+		DomainList: domainPath,
+		CATrusted:  true,
+	})
+	if err := os.WriteFile(domainPath, []byte("api.example.test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	fake := &fakeAdapter{
 		trustStarted: make(chan struct{}),
 		releaseTrust: make(chan struct{}),
 	}
 	var out bytes.Buffer
-	runtime, err := NewRuntime(cfg, []domain.Entry{entry}, fake, &out)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- runtime.Serve(ctx) }()
+	go func() { done <- (Activation{Adapter: fake, Stdout: &out}).Start(ctx) }()
 	<-fake.trustStarted
 
 	if fake.installedPAC != "" {
