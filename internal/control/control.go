@@ -7,8 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -22,11 +20,6 @@ type State struct {
 	CATrusted        bool     `json:"caTrusted"`
 	DomainCount      int      `json:"domainCount"`
 	PendingLifecycle []string `json:"pendingLifecycle,omitempty"`
-}
-
-type RuntimeState struct {
-	State
-	Token string `json:"token"`
 }
 
 type Server struct {
@@ -80,35 +73,6 @@ func (s *Server) Serve(listener net.Listener) error {
 
 func (s *Server) Close(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
-}
-
-func WriteRuntimeState(path string, state RuntimeState) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	_, err = file.Write(data)
-	return err
-}
-
-func ReadRuntimeState(path string) (RuntimeState, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return RuntimeState{}, err
-	}
-	var state RuntimeState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return RuntimeState{}, err
-	}
-	return state, nil
 }
 
 func FetchStatus(baseURL, token string) (State, error) {

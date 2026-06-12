@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,6 +26,7 @@ import (
 	"seamless-cors/internal/liveconfig"
 	"seamless-cors/internal/pacrouting"
 	"seamless-cors/internal/platform"
+	"seamless-cors/internal/runtimecoord"
 )
 
 var ErrLifecycleConsentDeclined = errors.New("explicit lifecycle consent declined")
@@ -232,7 +232,7 @@ type Runtime struct {
 	listeners        []net.Listener
 	token            string
 	runtimeDir       string
-	statePath        string
+	coord            *runtimecoord.Coordinator
 	liveConfig       *liveconfig.Source
 	pendingLifecycle []string
 }
@@ -317,7 +317,7 @@ func NewRuntimeFromLiveConfig(source *liveconfig.Source, snapshot liveconfig.Sna
 		listeners:  []net.Listener{proxyListener, pacListener, controlListener},
 		token:      token,
 		runtimeDir: runtimeDir,
-		statePath:  filepath.Join(runtimeDir, "control-state.json"),
+		coord:      runtimecoord.New(runtimeDir),
 	}, nil
 }
 
@@ -367,10 +367,7 @@ func (r *Runtime) Serve(ctx context.Context) error {
 		r.Close()
 		return err
 	}
-	state := control.RuntimeState{
-		State: r.controlState(),
-		Token: r.token,
-	}
+	state := runtimecoord.RuntimeState{State: r.controlState(), Token: r.token}
 	if err := r.writeRuntimeState(state); err != nil {
 		r.Close()
 		return err
@@ -406,75 +403,75 @@ func (r *Runtime) Close() error {
 }
 
 func Stop(stdout, _ io.Writer) error {
-	state, err := readRuntimeState()
+	coord, err := runtimecoord.Default()
 	if err != nil {
+		return err
+	}
+	verification := coord.Verify()
+	if verification.Status != runtimecoord.Active {
 		fmt.Fprintln(stdout, "seamless-cors stop requested; no running seamless-cors found")
 		return cleanRuntime(platform.CurrentAdapter)
 	}
-	stopped, err := control.CallStop("http://"+state.ControlListen, state.Token, stdout)
+	stopped, err := control.CallStop("http://"+verification.State.ControlListen, verification.State.Token, stdout)
 	if err != nil {
 		return err
 	}
 	if stopped {
-		waitForRuntimeToStop(state)
+		runtimecoord.WaitForStop(verification.State)
 	}
 	return cleanRuntime(platform.CurrentAdapter)
 }
 
 func Status(stdout, _ io.Writer) error {
-	state, err := readRuntimeState()
+	coord, err := runtimecoord.Default()
 	if err != nil {
+		return err
+	}
+	verification := coord.Verify()
+	if verification.Status == runtimecoord.Missing {
 		fmt.Fprintln(stdout, "seamless-cors status: not running")
 		reportCAHealth(stdout, platform.CurrentAdapter)
 		reportCleanupNeeded(stdout, platform.CurrentAdapter, false)
 		return nil
 	}
-	if err := control.CallStatus("http://"+state.ControlListen, state.Token, stdout); err != nil {
+	if verification.Status == runtimecoord.Stale {
+		fmt.Fprintln(stdout, "seamless-cors status: not running")
+		reportCAHealth(stdout, platform.CurrentAdapter)
+		fmt.Fprintln(stdout, "stale runtime state detected; run start or stop to clean up")
+		reportCleanupNeeded(stdout, platform.CurrentAdapter, true)
+		return nil
+	}
+	if err := control.CallStatus("http://"+verification.State.ControlListen, verification.State.Token, stdout); err != nil {
 		return err
 	}
 	reportCAHealth(stdout, platform.CurrentAdapter)
-	if _, err := control.FetchStatus("http://"+state.ControlListen, state.Token); err != nil {
-		fmt.Fprintln(stdout, "stale runtime state detected; run start or stop to clean up")
-		reportCleanupNeeded(stdout, platform.CurrentAdapter, true)
-	}
 	return nil
 }
 
 func (r *Runtime) ensureSingleInstance() error {
-	if err := os.MkdirAll(r.runtimeDir, 0o700); err != nil {
+	cleanupNeeded, err := r.coord.EnsureStartAllowed()
+	if err != nil {
 		return err
 	}
-	state, err := control.ReadRuntimeState(r.statePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		_ = os.Remove(r.statePath)
-		return nil
+	if cleanupNeeded {
+		return cleanup.Clean(r.runtimeDir, r.adapter)
 	}
-	if runtimeStateIsActive(state) {
-		return fmt.Errorf("seamless-cors is already running")
-	}
-	return cleanup.Clean(r.runtimeDir, r.adapter)
+	return nil
 }
 
-func (r *Runtime) writeRuntimeState(state control.RuntimeState) error {
-	if err := control.WriteRuntimeState(r.statePath, state); err == nil {
+func (r *Runtime) writeRuntimeState(state runtimecoord.RuntimeState) error {
+	if err := r.coord.Write(state); err == nil {
 		return nil
 	} else if !os.IsExist(err) {
 		return err
 	}
-	existing, err := control.ReadRuntimeState(r.statePath)
-	if err != nil {
-		return err
-	}
-	if runtimeStateIsActive(existing) {
+	if r.coord.Verify().Status == runtimecoord.Active {
 		return fmt.Errorf("seamless-cors is already running")
 	}
 	if err := cleanup.Clean(r.runtimeDir, r.adapter); err != nil {
 		return err
 	}
-	return control.WriteRuntimeState(r.statePath, state)
+	return r.coord.Write(state)
 }
 
 func (r *Runtime) watchLiveConfig(ctx context.Context, errs chan<- error) {
@@ -539,14 +536,6 @@ func (r *Runtime) controlStateLocked() control.State {
 	}
 }
 
-func readRuntimeState() (control.RuntimeState, error) {
-	runtimeDir, err := config.RuntimeDir()
-	if err != nil {
-		return control.RuntimeState{}, err
-	}
-	return control.ReadRuntimeState(filepath.Join(runtimeDir, "control-state.json"))
-}
-
 func randomToken() (string, error) {
 	var bytes [32]byte
 	if _, err := rand.Read(bytes[:]); err != nil {
@@ -564,21 +553,11 @@ func cleanRuntime(adapter cleanup.Adapter) error {
 }
 
 func activeRuntimeState() (bool, error) {
-	state, err := readRuntimeState()
+	coord, err := runtimecoord.Default()
 	if err != nil {
-		return false, nil
+		return false, err
 	}
-	return runtimeStateIsActive(state), nil
-}
-
-func waitForRuntimeToStop(state control.RuntimeState) {
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if !runtimeStateIsActive(state) {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	return coord.Verify().Status == runtimecoord.Active, nil
 }
 
 func reportCleanupNeeded(stdout io.Writer, adapter platform.Adapter, staleState bool) {
@@ -609,21 +588,5 @@ func reportCAHealth(stdout io.Writer, adapter platform.Adapter) {
 	fmt.Fprintf(stdout, "installed-ca: %s\n", report.Health)
 	if !report.Expires.IsZero() {
 		fmt.Fprintf(stdout, "installed-ca-expires: %s\n", report.Expires.Format("2006-01-02"))
-	}
-}
-
-func runtimeStateIsActive(state control.RuntimeState) bool {
-	if state.ControlListen == "" || state.Token == "" {
-		return false
-	}
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for {
-		if _, err := control.FetchStatus("http://"+state.ControlListen, state.Token); err == nil {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
 }

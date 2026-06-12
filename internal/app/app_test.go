@@ -20,6 +20,7 @@ import (
 	"seamless-cors/internal/domain"
 	"seamless-cors/internal/liveconfig"
 	"seamless-cors/internal/platform"
+	"seamless-cors/internal/runtimecoord"
 )
 
 type fakeAdapter struct {
@@ -922,8 +923,8 @@ func writeStaleRuntimeState(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	statePath := filepath.Join(runtimeDir, "control-state.json")
-	err = control.WriteRuntimeState(statePath, control.RuntimeState{
+	coord := runtimecoord.New(runtimeDir)
+	err = coord.Write(runtimecoord.RuntimeState{
 		State: control.State{
 			ControlListen: "127.0.0.1:1",
 		},
@@ -932,7 +933,7 @@ func writeStaleRuntimeState(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return statePath
+	return filepath.Join(runtimeDir, runtimecoord.StateFileName)
 }
 
 func waitForFile(t *testing.T, path string) {

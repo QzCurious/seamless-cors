@@ -180,6 +180,10 @@ _Avoid_: platform-native app config directory
 The durable location under the Home Config Directory for runtime coordination state and product-owned cleanup files.
 _Avoid_: temp runtime state, volatile cleanup files
 
+**Runtime Coordination**:
+A lifecycle behavior that interprets Runtime State File presence, Runtime State Verification results, and Single User Instance decisions for commands without performing Runtime Cleanup itself.
+_Avoid_: cleanup module, process supervisor, daemon manager, file-exists-is-running
+
 **Installed CA Storage**:
 The durable location under the Home Config Directory for seamless-cors-owned Installed User CA material, kept outside Runtime Cleanup.
 _Avoid_: runtime CA storage, temp CA files, stop-owned CA files
