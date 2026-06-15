@@ -16,8 +16,8 @@ import (
 
 	"github.com/elazarl/goproxy"
 
-	"seamless-cors/internal/ca"
 	"seamless-cors/internal/platform"
+	"seamless-cors/internal/userca"
 )
 
 func TestHTTPProxyForwardsRequestsAndRepairsAllStatuses(t *testing.T) {
@@ -142,8 +142,8 @@ func TestTrustedHTTPSInterceptionRepairsResponseAndCompletes(t *testing.T) {
 		t.Fatal("missing intercepted TLS peer certificate")
 	}
 	leaf := resp.TLS.PeerCertificates[0]
-	if got := leaf.NotAfter.Sub(leaf.NotBefore); got != ca.LeafValidity {
-		t.Fatalf("leaf validity = %s, want %s", got, ca.LeafValidity)
+	if got := leaf.NotAfter.Sub(leaf.NotBefore); got != userca.LeafValidity {
+		t.Fatalf("leaf validity = %s, want %s", got, userca.LeafValidity)
 	}
 }
 
@@ -243,7 +243,7 @@ func (w failingWriter) Write([]byte) (int, error) {
 func trustedProxyServer(t *testing.T, upstreamClient *http.Client) (*httptest.Server, *url.URL, *tls.Config) {
 	t.Helper()
 	store := &testTrustStore{}
-	authority, _, err := ca.Ensure(t.TempDir(), store)
+	authority, _, err := userca.Ensure(t.TempDir(), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +275,7 @@ func (s *testTrustStore) TrustedCAs() ([]platform.CARecord, error) {
 }
 
 func (s *testTrustStore) TrustCA(certPEM []byte) error {
-	fingerprint, err := ca.SHA1Fingerprint(certPEM)
+	fingerprint, err := userca.SHA1Fingerprint(certPEM)
 	if err != nil {
 		return err
 	}

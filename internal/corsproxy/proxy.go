@@ -20,12 +20,12 @@ import (
 
 	"github.com/elazarl/goproxy"
 
-	"seamless-cors/internal/ca"
+	"seamless-cors/internal/userca"
 )
 
 type Options struct {
 	CATrusted bool
-	Authority *ca.Authority
+	Authority *userca.Authority
 	Transport *http.Transport
 }
 
@@ -163,7 +163,7 @@ func signHostCertificate(caCert tls.Certificate, hostname string) (*tls.Certific
 			Organization: []string{"seamless-cors local MITM proxy"},
 		},
 		NotBefore:             notBefore,
-		NotAfter:              notBefore.Add(ca.LeafValidity),
+		NotAfter:              notBefore.Add(userca.LeafValidity),
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
@@ -222,7 +222,7 @@ func (s *memoryCertStore) Fetch(hostname string, gen func() (*tls.Certificate, e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	if cached, ok := s.certs[hostname]; ok && now.Sub(cached.generatedAt) <= ca.LeafCacheMaxAge {
+	if cached, ok := s.certs[hostname]; ok && now.Sub(cached.generatedAt) <= userca.LeafCacheMaxAge {
 		return cached.cert, nil
 	}
 	cert, err := gen()

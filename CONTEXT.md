@@ -8,6 +8,10 @@ seamless-cors is a DEV/QA context for controlled browser-origin testing across c
 A local DEV/QA network tool that sits between the browser and configured upstream domains so browser requests can be tested under adjusted cross-origin behavior without changing application request URLs.
 _Avoid_: seamless-cors, generic proxy, CORS middleware
 
+**Managed Gateway**:
+The command-facing module that owns starting, stopping, and read-only status for the running gateway, including Runtime Coordination, Runtime Cleanup decisions, Managed PAC state, and runtime visibility.
+_Avoid_: lifecycle operation module, command service, app orchestration
+
 **Managed System Proxy**:
 A traffic capture approach where the gateway configures the operating system or browser proxy settings on behalf of the user, so application requests keep their original URLs and no manual proxy setup is required.
 _Avoid_: VPN, manual proxy, browser-only workaround
@@ -67,6 +71,10 @@ _Avoid_: opaque unsupported result, single-error compatibility check
 **Best-Effort Stop**:
 A stop behavior where cleanup still attempts to remove owned runtime and PAC state even when capability checks are limited or reporting platform problems.
 _Avoid_: capability-blocked cleanup, leaving owned runtime state behind
+
+**UserCA**:
+A simplified product name for the current user's seamless-cors-owned development certificate authority, including Installed User CA lifecycle and local signing material.
+_Avoid_: root CA service, trust manager, certificate service
 
 **User-Trusted Development CA**:
 A local certificate authority trusted only in the current user's trust store so the gateway can inspect HTTPS traffic for configured upstream domains during DEV/QA work.

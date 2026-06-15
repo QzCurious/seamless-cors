@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"seamless-cors/internal/app"
+	"seamless-cors/internal/managedgateway"
 )
 
 const usage = `Usage:
@@ -23,9 +24,9 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		check:     app.Check,
 		install:   app.Install,
 		uninstall: app.Uninstall,
-		start:     app.Start,
-		stop:      app.Stop,
-		status:    app.Status,
+		start:     managedgateway.Start,
+		stop:      managedgateway.Stop,
+		status:    managedgateway.Status,
 	})
 }
 

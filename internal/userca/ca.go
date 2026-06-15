@@ -1,4 +1,4 @@
-package ca
+package userca
 
 import (
 	"crypto/rand"
