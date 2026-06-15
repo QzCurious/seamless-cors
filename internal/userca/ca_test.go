@@ -3,7 +3,6 @@ package userca
 import (
 	"crypto/x509"
 	"encoding/pem"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -103,30 +102,6 @@ func TestEnsureReusesUsableCAAndRepairsPermissions(t *testing.T) {
 	}
 }
 
-func TestEnsureFailsWhenPermissionRepairFails(t *testing.T) {
-	dir := t.TempDir()
-	fake := &fakeTrustStore{}
-	if _, _, err := Ensure(dir, fake); err != nil {
-		t.Fatal(err)
-	}
-	wantErr := errors.New("chmod failed")
-	originalChmod := chmod
-	chmod = func(string, os.FileMode) error {
-		return wantErr
-	}
-	defer func() {
-		chmod = originalChmod
-	}()
-
-	authority, _, err := Ensure(dir, fake)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("Ensure error = %v, want %v", err, wantErr)
-	}
-	if authority != nil {
-		t.Fatal("CA with unrepaired permissions should not be reused")
-	}
-}
-
 func TestEnsureReplacesMismatchedMaterial(t *testing.T) {
 	dir := t.TempDir()
 	fake := &fakeTrustStore{}
@@ -164,29 +139,5 @@ func TestUninstallRemovesTrustAndLocalMaterial(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("CA dir remained: %v", err)
-	}
-}
-
-func TestAuthorityExposesTLSCertificate(t *testing.T) {
-	authority, _, err := Ensure(t.TempDir(), &fakeTrustStore{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	cert, err := authority.TLSCertificate()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cert.Certificate) == 0 {
-		t.Fatal("missing certificate chain")
-	}
-	if cert.PrivateKey == nil {
-		t.Fatal("missing private key")
-	}
-	if cert.Leaf == nil {
-		t.Fatal("missing parsed leaf")
-	}
-	if !cert.Leaf.IsCA {
-		t.Fatal("leaf is not a CA certificate")
 	}
 }

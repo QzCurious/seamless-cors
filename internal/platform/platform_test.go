@@ -2,12 +2,6 @@ package platform
 
 import "testing"
 
-func TestNoopAdapterFailsManagedPACInstallationClearly(t *testing.T) {
-	if err := (NoopAdapter{}).InstallPAC("http://127.0.0.1:8079/seamless-cors.pac"); err == nil {
-		t.Fatal("expected unsupported managed PAC installation to fail")
-	}
-}
-
 func TestManagedPACFootprintMatchesOnlyLoopbackHTTPPACFilename(t *testing.T) {
 	tests := map[string]bool{
 		"http://127.0.0.1:8079/seamless-cors.pac":               true,

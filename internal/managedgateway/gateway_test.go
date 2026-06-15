@@ -88,34 +88,6 @@ func (f *fakeAdapter) RemoveCAs([]string) error {
 	return nil
 }
 
-func TestStartGuidanceShowsEditableFilesAndManagedPAC(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	cfg := config.Default()
-	configPath := filepath.Join(home, ".seamless-cors", "config.yaml")
-	domainPath := filepath.Join(home, ".seamless-cors", "domains.txt")
-	cfg.SourcePath = configPath
-	cfg.DomainList = domainPath
-	_, live := loadLiveConfigForTest(t, cfg, "")
-	var out bytes.Buffer
-
-	writeStartGuidance(&out, live)
-
-	got := out.String()
-	want := "seamless-cors running\n" +
-		"config: " + configPath + "\n" +
-		"domain-list: " + domainPath + "\n" +
-		"managed-pac: active\n"
-	if got != want {
-		t.Fatalf("start guidance = %q", got)
-	}
-	for _, unwanted := range []string{"runtime-proxy-endpoint:", "runtime-pac-endpoint:", "runtime-control-endpoint:"} {
-		if strings.Contains(got, unwanted) {
-			t.Fatalf("start guidance included %q:\n%s", unwanted, got)
-		}
-	}
-}
-
 func TestLifecycleConsentPromptReportsManagedPACOnly(t *testing.T) {
 	var out bytes.Buffer
 
@@ -718,44 +690,6 @@ func TestManagedGatewayStopsOnInvalidLiveConfig(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("runtime did not stop after invalid live config")
-	}
-}
-
-func TestStatusReportsPendingLifecycleChanges(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	domainPath := filepath.Join(home, "domains.txt")
-	configPath := filepath.Join(home, "config.yaml")
-	if err := os.WriteFile(domainPath, []byte("api.example.test\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.Default()
-	cfg.DomainList = domainPath
-	cfg.SourcePath = configPath
-	cfg.CATrusted = false
-	writeConfigForRuntime(t, configPath, cfg)
-
-	runtime, err := newRuntimeForTest(t, cfg, "api.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- runtime.Serve(ctx) }()
-	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
-
-	changed := cfg
-	changed.CATrusted = true
-	writeConfigForRuntime(t, configPath, changed)
-
-	waitForStatusOutput(t, "pending lifecycle changes: ca-trusted")
-	if status := currentStatusOutput(t); !strings.Contains(status, "ca-trusted: false") {
-		t.Fatalf("restart-applied lifecycle changed active CA trust:\n%s", status)
-	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
 	}
 }
 

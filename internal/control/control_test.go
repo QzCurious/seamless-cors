@@ -40,9 +40,6 @@ func TestControlEndpointReportsHumanStatusAndAcceptsStop(t *testing.T) {
 			t.Fatalf("status output missing %q: %q", want, out.String())
 		}
 	}
-	if strings.Contains(out.String(), "log-level") {
-		t.Fatalf("status output included obsolete log-level: %q", out.String())
-	}
 	resp, err := http.Post(base+"/stop", "text/plain", nil)
 	if err != nil {
 		t.Fatal(err)

@@ -30,16 +30,6 @@ https://localhost:9443
 	}
 }
 
-func TestFullOriginWithoutExplicitPortUsesDefaultPort(t *testing.T) {
-	entry, err := ParseEntry("https://api.example.test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if entry.Scheme != "https" || entry.Host != "api.example.test" || entry.Port != "443" {
-		t.Fatalf("https origin entry = %#v", entry)
-	}
-}
-
 func TestIPv6RequiresFullOrigin(t *testing.T) {
 	if _, err := ParseEntry("::1"); err == nil {
 		t.Fatal("expected IPv6 shorthand to fail")

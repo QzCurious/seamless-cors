@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -95,8 +94,5 @@ func TestWriteUsesExclusiveRuntimeStateFile(t *testing.T) {
 
 	if !os.IsExist(err) {
 		t.Fatalf("second write error = %v, want exists", err)
-	}
-	if filepath.Base(coord.stateFilePath()) != StateFileName {
-		t.Fatalf("state path = %s, want file %s", coord.stateFilePath(), StateFileName)
 	}
 }

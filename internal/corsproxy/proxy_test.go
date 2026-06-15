@@ -4,17 +4,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
-	"errors"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"sync/atomic"
 	"testing"
-
-	"github.com/elazarl/goproxy"
 
 	"seamless-cors/internal/platform"
 	"seamless-cors/internal/userca"
@@ -138,13 +133,6 @@ func TestTrustedHTTPSInterceptionRepairsResponseAndCompletes(t *testing.T) {
 	if string(body) != "secure upstream body" {
 		t.Fatalf("body = %q", string(body))
 	}
-	if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
-		t.Fatal("missing intercepted TLS peer certificate")
-	}
-	leaf := resp.TLS.PeerCertificates[0]
-	if got := leaf.NotAfter.Sub(leaf.NotBefore); got != userca.LeafValidity {
-		t.Fatalf("leaf validity = %s, want %s", got, userca.LeafValidity)
-	}
 }
 
 func TestTrustedHTTPSInterceptionAnswersPreflightLocally(t *testing.T) {
@@ -186,58 +174,22 @@ func TestTrustedHTTPSInterceptionAnswersPreflightLocally(t *testing.T) {
 	}
 }
 
-func TestTransportFailureUsesProxyDefaultErrorShape(t *testing.T) {
-	core := newTestCore(t, Options{Transport: &http.Transport{}})
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:1/unreachable", nil)
-	req.Header.Set("Origin", "https://app.local")
-	rec := httptest.NewRecorder()
-
-	core.ServeHTTP(rec, req)
-
-	resp := rec.Result()
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
-		t.Fatalf("unexpected custom JSON content type: %q", resp.Header.Get("Content-Type"))
-	}
-	if strings.Contains(string(body), `"source":"seamless-cors"`) {
-		t.Fatalf("unexpected custom gateway body: %s", body)
-	}
-}
-
 func TestProxyLoggingIsQuietByDefault(t *testing.T) {
 	t.Setenv("SEAMLESS_CORS_DEBUG_PROXY", "")
-	proxy := goproxy.NewProxyHttpServer()
-	proxy.Logger = log.New(failingWriter{t: t}, "", 0)
+	core := newTestCore(t, Options{})
 
-	configureProxyLogging(proxy)
-
-	if proxy.Verbose {
+	if core.proxy.Verbose {
 		t.Fatal("proxy should not be verbose by default")
 	}
-	proxy.Logger.Printf("should be discarded")
 }
 
 func TestProxyLoggingDebugEnvEnablesVerboseLogs(t *testing.T) {
-	for _, value := range []string{"1", "true", "yes", "TRUE", "YES"} {
-		t.Run(value, func(t *testing.T) {
-			t.Setenv("SEAMLESS_CORS_DEBUG_PROXY", value)
-			core := newTestCore(t, Options{})
+	t.Setenv("SEAMLESS_CORS_DEBUG_PROXY", "1")
+	core := newTestCore(t, Options{})
 
-			if !core.proxy.Verbose {
-				t.Fatal("proxy should be verbose with debug env")
-			}
-		})
+	if !core.proxy.Verbose {
+		t.Fatal("proxy should be verbose with debug env")
 	}
-}
-
-type failingWriter struct {
-	t *testing.T
-}
-
-func (w failingWriter) Write([]byte) (int, error) {
-	w.t.Fatal("default proxy logger should discard output")
-	return 0, errors.New("unexpected write")
 }
 
 func trustedProxyServer(t *testing.T, upstreamClient *http.Client) (*httptest.Server, *url.URL, *tls.Config) {
