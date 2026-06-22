@@ -13,6 +13,7 @@ const usage = `Usage:
   seamless-cors check
   seamless-cors install
   seamless-cors uninstall
+  seamless-cors serve
   seamless-cors start
   seamless-cors stop [flags]
   seamless-cors status [flags]
@@ -24,6 +25,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		check:     app.Check,
 		install:   app.Install,
 		uninstall: app.Uninstall,
+		serve:     managedgateway.Serve,
 		start:     managedgateway.Start,
 		stop:      managedgateway.Stop,
 		status:    managedgateway.Status,
@@ -34,6 +36,7 @@ type commandHandlers struct {
 	check     func(io.Writer, io.Writer) error
 	install   func(io.Writer, io.Writer) error
 	uninstall func(io.Writer, io.Writer) error
+	serve     func(io.Writer, io.Writer) error
 	start     func(io.Writer, io.Writer) error
 	stop      func(io.Writer, io.Writer) error
 	status    func(io.Writer, io.Writer) error
@@ -68,6 +71,11 @@ func run(args []string, stdout, stderr io.Writer, commands commandHandlers) erro
 			return err
 		}
 		return reportCommandError(stderr, commands.start(stdout, stderr))
+	case "serve":
+		if err := rejectUnexpectedArgs(stderr, "serve", args[1:]); err != nil {
+			return err
+		}
+		return reportCommandError(stderr, commands.serve(stdout, stderr))
 	case "stop":
 		return reportCommandError(stderr, commands.stop(stdout, stderr))
 	case "status":

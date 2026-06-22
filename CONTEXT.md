@@ -8,9 +8,45 @@ seamless-cors is a DEV/QA context for controlled browser-origin testing across c
 A local DEV/QA network tool that sits between the browser and configured upstream domains so browser requests can be tested under adjusted cross-origin behavior without changing application request URLs.
 _Avoid_: seamless-cors, generic proxy, CORS middleware
 
-**Managed Gateway**:
-The command-facing module that owns starting, stopping, and read-only status for the running gateway, including Runtime Coordination, Runtime Cleanup decisions, Managed PAC state, and runtime visibility.
-_Avoid_: lifecycle operation module, command service, app orchestration
+**Gateway Facade**:
+The surface-agnostic gateway command boundary that owns start, stop, status, check, and Installed User CA lifecycle commands for CLI and HTTP control surfaces. It coordinates Gateway Coordination, Gateway Footprint Cleanup decisions, Managed PAC state, runtime visibility, and UserCA lifecycle behavior without owning the Gateway Runtime internals.
+_Avoid_: Managed Gateway, lifecycle operation module, command service, app orchestration
+
+**Surface-Neutral Command Result**:
+A Gateway Facade operation result that describes command outcomes and required next actions without terminal text, HTTP status codes, or surface-specific formatting.
+_Avoid_: CLI output, HTTP response model, stringly command result
+
+**Gateway Router**:
+An HTTP command surface that exposes user-facing gateway feature routes and renders Gateway Facade results as HTTP responses.
+_Avoid_: runtime control endpoint, proxy route, daemon supervisor
+
+**Gateway Owner**:
+The foreground process that owns the Gateway Router and user-facing gateway command authority and, when active, the Gateway Runtime and Gateway Footprint Cleanup responsibility.
+_Avoid_: daemon supervisor, client command, detached runtime owner
+
+**Gateway Runtime**:
+The live traffic-serving engine that owns the proxy listener, proxy server, PAC listener, PAC server, live configuration, runtime close behavior, and fatal runtime error reporting without installing or unsetting OS PAC state.
+_Avoid_: lifecycle facade, command router, OS proxy manager, cleanup owner
+
+**Router-Only Serve**:
+A command behavior where the command becomes the Gateway Owner and starts the Gateway Router as an HTTP client entry point without automatically starting Gateway Runtime, running Gateway Footprint Cleanup, or changing managed OS state; it fails clearly when a Gateway Owner already exists and may claim stale Gateway State Cache only after verification finds no reachable owner.
+_Avoid_: implicit gateway start, daemonized start, hidden lifecycle activation, stale-cache cleanup, OS PAC repair
+
+**Router-Hosted Start**:
+An HTTP start behavior where an HTTP client uses `GET /start/plan` followed by `POST /start` against an existing router-only Gateway Owner to activate Gateway Runtime without creating a competing gateway process.
+_Avoid_: CLI start delegation, terminal prompt in serve, duplicate router start, serve-blocked start, split-brain gateway
+
+**Start-Hosted Router**:
+A startup behavior where gateway start becomes the Gateway Owner by hosting the Gateway Router and Gateway Runtime while gateway activation remains governed by Explicit Lifecycle Consent and Lifecycle Activation Order.
+_Avoid_: router-only fallback, control endpoint replacement, implicit consent
+
+**Router-Hosted Start Failure**:
+A failed start behavior where direct `start` exits and removes owner visibility, while `/start` sent to an existing router-only Gateway Owner leaves that owner alive.
+_Avoid_: surprise serve fallback, failed-start owner leak, serve shutdown on start rejection
+
+**Owner-Blocked CLI Start**:
+A CLI start behavior where `start` fails clearly when a valid Gateway Owner already exists instead of delegating activation to that owner.
+_Avoid_: CLI start delegation, hidden HTTP start, remote foreground ownership
 
 **Managed System Proxy**:
 A traffic capture approach where the gateway configures the operating system or browser proxy settings on behalf of the user, so application requests keep their original URLs and no manual proxy setup is required.
@@ -53,7 +89,7 @@ A preflight lifecycle behavior where the gateway verifies that the current platf
 _Avoid_: partial platform setup, trust install on unsupported platform, continue-anyway platform prompt
 
 **Capability Check Command**:
-A read-only user-facing command that reports whether the current system can run the managed gateway lifecycle before the user attempts installation or start.
+A local, read-only user-facing command that reports whether the current system can run the managed gateway lifecycle before the user attempts installation or start, without routing through an existing Gateway Owner.
 _Avoid_: hidden compatibility discovery, lifecycle-only platform errors, mutating compatibility check
 
 **Capability-Only Check**:
@@ -69,8 +105,24 @@ A capability reporting behavior that shows both an overall support result and in
 _Avoid_: opaque unsupported result, single-error compatibility check
 
 **Best-Effort Stop**:
-A stop behavior where cleanup still attempts to remove owned runtime and PAC state even when capability checks are limited or reporting platform problems.
-_Avoid_: capability-blocked cleanup, leaving owned runtime state behind
+A stop behavior where Gateway Footprint Cleanup still attempts to remove seamless-cors-owned active PAC state, live coordination cache, and the Gateway Owner even when capability checks are limited or reporting platform problems.
+_Avoid_: capability-blocked cleanup, leaving owned runtime state behind, router-only stop
+
+**Owner Stop**:
+A stop behavior where `stop` and `/stop` tear down the Gateway Owner itself, including a router-only owner, and close Gateway Runtime before Gateway Footprint Cleanup so no new gateway traffic is accepted after runtime close completes.
+_Avoid_: runtime-only stop, router-only survival, stop-as-status, accepted-before-cleanup, cleanup-before-runtime-close
+
+**Retryable Stop Failure**:
+A failed stop behavior where the Gateway Owner remains alive after ordinary Blocking Cleanup Subject failure so the user can retry `stop` through the same command channel, even if Gateway Runtime has already been partially or fully closed.
+_Avoid_: failed-stop owner exit, stale-cache recovery first, retry-without-owner, runtime-must-remain-active
+
+**Blocking Cleanup Subject**:
+A gateway cleanup subject, including seamless-cors-owned active OS PAC settings and the live Gateway State Cache, that must be removed and reported before `stop` can claim success because process exit will not reliably remove it or because leaving it behind would make the successful stop result untrue.
+_Avoid_: best-effort durable cleanup, process-exit cleanup, warning-only cleanup
+
+**Process-Bound Cleanup Subject**:
+A gateway cleanup subject owned by the current process that should be closed gracefully but will be released by process termination if graceful close fails.
+_Avoid_: stop-blocking runtime resource, durable cleanup, OS-managed state
 
 **UserCA**:
 A simplified product name for the current user's seamless-cors-owned development certificate authority, including Installed User CA lifecycle and local signing material.
@@ -101,7 +153,7 @@ A lifecycle behavior where `start` with `ca-trusted: true` and CA Lifecycle Comm
 _Avoid_: repeated trust prompt, start without usable trust, install-only trust repair
 
 **Single Installed CA State**:
-A CA lifecycle invariant where multiple seamless-cors-owned CA trust footprints are treated as repair-needed state and replaced by one usable Installed User CA.
+A CA lifecycle invariant where multiple seamless-cors-owned CA trust identities are treated as repair-needed state and replaced by one usable Installed User CA.
 _Avoid_: multiple active development CAs, ambiguous signing identity
 
 **CA Material Integrity**:
@@ -145,7 +197,7 @@ A clean-break configuration behavior where only current settings affect gateway 
 _Avoid_: backward-compatible alias, migration, obsolete-setting special case
 
 **Fatal Config Error**:
-A configuration behavior where an invalid, missing, or unreadable config file causes the gateway to report the validation problem, perform Runtime Cleanup, and stop.
+A configuration behavior where an invalid, missing, or unreadable config file causes the gateway to report the validation problem, perform Gateway Footprint Cleanup, and stop.
 _Avoid_: silent config fallback, stale config after invalid edit
 
 **Lifecycle Operation**:
@@ -153,16 +205,12 @@ A gateway operation chosen explicitly through a command or start-time flag becau
 _Avoid_: live OS reconfiguration, config-triggered permission prompt
 
 **Automatic Listeners**:
-A lifecycle behavior where the gateway chooses available loopback ports for its proxy, PAC, and control endpoints at startup, then wires dependent runtime state in sequence.
+A lifecycle behavior where the gateway chooses available loopback ports for its proxy, PAC, and router endpoints at startup, then wires dependent gateway state in sequence.
 _Avoid_: user-selected listener ports, fixed listener ports, manual listener addresses
 
 **Loopback Default**:
 A listener behavior where gateway endpoints bind to loopback.
 _Avoid_: LAN-exposed proxy, user-selected bind address
-
-**Control Endpoint**:
-A separate loopback endpoint used by gateway commands such as stop and status, protected by runtime state rather than mixed into browser proxy traffic.
-_Avoid_: proxy-path admin command, public control API
 
 **Proxy Listener**:
 A local proxy endpoint where traffic that reaches it is eligible for CORS repair, normally reached through PAC Routing for Domain List matches.
@@ -185,47 +233,51 @@ The default user configuration location at `.seamless-cors` under the user's hom
 _Avoid_: platform-native app config directory
 
 **Runtime State Directory**:
-The durable location under the Home Config Directory for runtime coordination state and product-owned cleanup files.
-_Avoid_: temp runtime state, volatile cleanup files
+The durable location under the Home Config Directory for the Gateway State Cache.
+_Avoid_: temp runtime state, volatile cleanup files, miscellaneous runtime file storage
 
-**Runtime Coordination**:
-A lifecycle behavior that interprets Runtime State File presence, Runtime State Verification results, and Single User Instance decisions for commands without performing Runtime Cleanup itself.
-_Avoid_: cleanup module, process supervisor, daemon manager, file-exists-is-running
+**Gateway Coordination**:
+A lifecycle behavior that owns Gateway State Cache operations, Gateway State Verification, Gateway State Lease mechanics, and Single User Instance decisions while allowing lifecycle cleanup paths to remove cache state through Gateway Footprint Cleanup.
+_Avoid_: Runtime Coordination, cleanup module, process supervisor, daemon manager, file-exists-is-running
 
 **Installed CA Storage**:
-The durable location under the Home Config Directory for seamless-cors-owned Installed User CA material, kept outside Runtime Cleanup.
+The durable location under the Home Config Directory for seamless-cors-owned Installed User CA material, kept outside Gateway Footprint Cleanup.
 _Avoid_: runtime CA storage, temp CA files, stop-owned CA files
 
-**Runtime State File**:
-A durable runtime record that signals a possible active gateway instance, including the automatic Control Endpoint needed by `stop` and `status`.
-_Avoid_: pid-only lock file, configured control address, in-memory instance registry
+**Gateway State Cache**:
+A durable gateway coordination cache that lets client commands discover and verify the Gateway Owner by its HTTP Router listener and token identity.
+_Avoid_: Runtime State File, control state, pid-only lock file, configured control address, in-memory instance registry, source of truth
 
-**Runtime State Verification**:
-A lifecycle behavior where an existing Runtime State File is checked against its Control Endpoint before the gateway treats another instance as active.
-_Avoid_: file-exists-is-running, port-only lock, stale state as active instance
+**Gateway State Lease**:
+An ownership rule where a discoverable Gateway Owner continuously exits and runs Gateway Footprint Cleanup if the Gateway State Cache disappears or no longer carries that owner's HTTP Router listener and token identity.
+_Avoid_: advisory state file, best-effort owner hint, stale owner survival
 
-**Runtime-Owned File Cleanup**:
-A cleanup behavior where known seamless-cors runtime files under the Runtime State Directory may be removed as product-owned leftovers.
-_Avoid_: deleting user files, broad home-directory cleanup, record-required file cleanup
+**Gateway State Verification**:
+A read-only Gateway Coordination behavior where an existing Gateway State Cache is checked through the HTTP Router before the gateway treats another Gateway Owner as active.
+_Avoid_: Runtime State Verification, file-exists-is-running, port-only lock, stale state as active instance, cleanup validation
 
-**Footprint-Based Cleanup**:
-A cleanup behavior where the gateway scans current machine state and removes resources carrying a stable seamless-cors ownership footprint.
-_Avoid_: per-run PAC cleanup, previous-state restoration, guessed ownership
+**Ownership Marker**:
+A stable property proving a machine resource belongs to seamless-cors and may be modified or removed by gateway lifecycle cleanup.
+_Avoid_: heuristic ownership, name-only matching, user intent guess
 
-**Managed PAC Footprint**:
+**Marker-Based Cleanup**:
+A cleanup behavior where the gateway scans current machine state and removes resources only when an Ownership Marker proves the resource belongs to seamless-cors.
+_Avoid_: footprint-based cleanup, previous-state restoration, guessed ownership
+
+**Managed PAC Ownership Marker**:
 The stable loopback HTTP PAC URL shape whose path ends in `seamless-cors.pac`, proving a current managed PAC setting belongs to seamless-cors without depending on a run-specific port.
-_Avoid_: run-specific PAC identity, port-based ownership, full-URL ownership, non-loopback PAC ownership
+_Avoid_: managed PAC footprint, run-specific PAC identity, port-based ownership, full-URL ownership, non-loopback PAC ownership
 
-**CA Footprint**:
-The strict seamless-cors-owned current-user CA trust identity used to identify Installed User CA trust for lifecycle management.
-_Avoid_: name-contains matching, system-wide CA cleanup, user-authored CA identity
+**CA Ownership Marker**:
+The strict seamless-cors-owned current-user CA trust identity used to identify Installed User CA trust for CA lifecycle management.
+_Avoid_: CA footprint, name-contains matching, system-wide CA cleanup, user-authored CA identity
 
 **Cleanup Retry Guidance**:
-A user-facing cleanup behavior where failed cleanup explains that gateway-owned state remains and tells the user to run `seamless-cors stop` again after resolving the OS or permission problem.
+A user-facing cleanup behavior where failed cleanup explains that seamless-cors-owned state remains and tells the user to run `seamless-cors stop` again after resolving the OS or permission problem.
 _Avoid_: silent cleanup failure, false cleanup success, manual OS instructions first
 
 **Single User Instance**:
-A runtime rule where only one gateway process may run for a user at a time, with the Runtime State File used as the first signal that an instance may already be active.
+A gateway ownership rule where only one Gateway Owner may run for a user at a time, with the Gateway State Cache used as the first signal that an owner may already be active.
 _Avoid_: multi-instance gateway, competing PAC state, port-based instance detection
 
 **First-Start Bootstrap**:
@@ -240,6 +292,22 @@ _Avoid_: opaque default config, verbose manual, runtime listener settings
 A start-time user-facing output behavior shown only after required lifecycle consent and platform approval have succeeded, pointing to the editable Explicit Configuration, Domain List, and managed PAC state instead of runtime listener endpoints.
 _Avoid_: pre-approval running message, listener-first start output, proxy setup instructions, PAC listener summary, control listener summary
 
+**Start Plan**:
+A pre-activation start result that reports whether startup can proceed and whether Explicit Lifecycle Consent is required without changing OS-managed state or runtime visibility.
+_Avoid_: dry run, prompt callback, interactive start state machine
+
+**Already-Running Start**:
+An idempotent start result where planning or executing start against an active Gateway Runtime reports that the gateway is already running without treating the command as a failure.
+_Avoid_: duplicate runtime activation, start failure for active runtime, second owner
+
+**Execute-Time Start Recheck**:
+A start execution rule where `ExecuteStart` recomputes decisive lifecycle conditions before mutating and returns a structured consent-required result when supplied consent is missing or no longer sufficient.
+_Avoid_: plan-as-authorization, plan token, mutation-before-recheck
+
+**Single-Flight Start**:
+A start behavior where a Gateway Owner allows independent read-only Start Plans but accepts only one start mutation at a time, returning already-running or start-already-mutating results from execution based on current state.
+_Avoid_: queued mutation, duplicate mutation, competing activation, plan reservation
+
 **Pending Lifecycle Change**:
 A restart-applied Explicit Configuration change detected while the gateway is running and reported to the user without being applied automatically.
 _Avoid_: surprise permission prompt, implicit restart
@@ -253,7 +321,7 @@ A start-time user agreement collected before a Lifecycle Operation changes curre
 _Avoid_: implicit consent, persistent consent, surprise permission prompt, partial lifecycle consent
 
 **Managed PAC Consent**:
-An Explicit Lifecycle Consent required when a gateway start would replace existing managed PAC state, showing current managed PAC state and explaining that Runtime Cleanup removes seamless-cors PAC settings without restoring previous PAC state.
+An Explicit Lifecycle Consent required when a gateway start would replace existing managed PAC state, showing current managed PAC state and explaining that Gateway Footprint Cleanup removes seamless-cors-owned managed PAC settings without restoring previous PAC state.
 _Avoid_: silent proxy replacement, proxy chaining, broad proxy takeover
 
 **Independent PAC Lifecycle**:
@@ -304,12 +372,20 @@ _Avoid_: false uninstall success, trusted CA without local material, leftover pr
 A v1 runtime behavior where `start` runs attached in the foreground rather than launching an official background daemon.
 _Avoid_: daemon mode, background start
 
-**Runtime Cleanup**:
-An idempotent lifecycle behavior where `start`, `stop`, and gateway shutdown remove seamless-cors-owned PAC settings and runtime process state proven by footprint or runtime-file ownership, treating missing resources as already clean. `start` performs Runtime Cleanup only when no active gateway is verified.
-_Avoid_: status cleanup, broad cleanup, CA removal, restore-based cleanup
+**Client Command**:
+A command invocation that asks an existing Gateway Owner to perform user-facing gateway work and then exits without owning process lifetime or Gateway Footprint Cleanup.
+_Avoid_: detached owner, fake foreground control, remote Ctrl-C ownership
+
+**Owner-Routed CA Lifecycle Command**:
+A CA Lifecycle Command behavior where `install` and `uninstall` are sent to an existing Gateway Owner when one exists, including a router-only owner; `uninstall` is rejected while Gateway Runtime is active.
+_Avoid_: bypassing owner command authority, router-only local mutation, active-runtime CA removal
+
+**Gateway Footprint Cleanup**:
+An idempotent lifecycle behavior where `start`, `stop`, and Gateway Owner shutdown remove seamless-cors-owned managed PAC settings and Gateway State Cache state through Gateway Coordination operations, while leaving Installed User CA state untouched.
+_Avoid_: runtime cleanup, status cleanup, serve cleanup, broad cleanup, CA removal, restore-based cleanup
 
 **No PAC Restoration**:
-A cleanup boundary where Runtime Cleanup removes seamless-cors-owned managed PAC settings without reconstructing previous machine PAC state.
+A cleanup boundary where Gateway Footprint Cleanup removes seamless-cors-owned managed PAC settings without reconstructing previous machine PAC state.
 _Avoid_: previous-state rollback, proxy restoration, corporate PAC reconstruction
 
 **Human Status**:
@@ -317,7 +393,7 @@ A status output intended for interactive DEV/QA use rather than machine-readable
 _Avoid_: JSON status, scripting API
 
 **Read-Only Status**:
-A status behavior that reports gateway, cleanup-needed, and Installed User CA state, including stale Runtime State File detection, without changing proxy settings, CA trust, local CA material, or runtime files.
+A status behavior that reports gateway, cleanup-needed, and Installed User CA state, including stale Gateway State Cache detection, without changing proxy settings, CA trust, local CA material, or runtime files.
 _Avoid_: status-triggered cleanup, mutating status command
 
 **CA Health Status**:
@@ -345,7 +421,7 @@ A startup validation behavior where a Domain List with invalid lines fails befor
 _Avoid_: silent invalid entry, invalid-as-empty, partial startup warning
 
 **Fatal Domain List Error**:
-A live configuration behavior where an invalid, missing, or unreadable Domain List edit reports the validation problem, performs Runtime Cleanup, and stops the gateway.
+A live configuration behavior where an invalid, missing, or unreadable Domain List edit reports the validation problem, performs Gateway Footprint Cleanup, and stops the gateway.
 _Avoid_: stale valid routing, partial valid routing, silent invalid entry
 
 **Domain List Entry**:
@@ -524,7 +600,7 @@ QA engineer: "No, Live Configuration applies the newest values to incoming reque
 
 Developer: "What happens if I save an invalid config file while the gateway is running?"
 
-QA engineer: "Fatal Config Error reports the validation problem, performs Runtime Cleanup, and stops the gateway."
+QA engineer: "Fatal Config Error reports the validation problem, performs Gateway Footprint Cleanup, and stops the gateway."
 
 Developer: "What if my config still has removed listener or managed-proxy settings?"
 
@@ -540,15 +616,15 @@ QA engineer: "`start`, `stop`, and `status` manage the gateway runtime; CA Lifec
 
 Developer: "Does `start` launch a background service?"
 
-QA engineer: "No, Foreground Start keeps the gateway attached and lets Ctrl-C run Runtime Cleanup in v1."
+QA engineer: "No, Foreground Start keeps the gateway attached and lets Ctrl-C run Gateway Footprint Cleanup in v1."
 
 Developer: "Does Ctrl-C clean up the proxy and CA?"
 
-QA engineer: "Ctrl-C runs Runtime Cleanup for gateway runtime state, but Installed User CA trust remains until a CA Lifecycle Command removes it."
+QA engineer: "Ctrl-C runs Gateway Footprint Cleanup for seamless-cors-owned managed PAC settings and the Gateway State Cache, but Installed User CA trust remains until a CA Lifecycle Command removes it."
 
 Developer: "What if stop finds only cleanup-needed state?"
 
-QA engineer: "Runtime Cleanup finishes removing gateway-owned state before stop exits."
+QA engineer: "Gateway Footprint Cleanup finishes removing seamless-cors-owned managed PAC settings and the Gateway State Cache before stop exits."
 
 Developer: "Is status intended for scripts?"
 
@@ -562,7 +638,7 @@ Developer: "Why does status show listener addresses if I cannot configure them?"
 
 QA engineer: "Diagnostic Runtime Endpoint values are shown for troubleshooting, not setup."
 
-Developer: "What if status finds a stale Runtime State File?"
+Developer: "What if status finds a stale Gateway State Cache?"
 
 QA engineer: "Read-Only Status reports that the gateway is not running and leaves cleanup to start or stop."
 
@@ -580,7 +656,7 @@ QA engineer: "No, Loopback Default keeps listener endpoints local."
 
 Developer: "Do stop and status go through the proxy listener?"
 
-QA engineer: "No, Control Endpoint keeps command traffic separate from browser proxy traffic."
+QA engineer: "No, Gateway Router keeps command traffic separate from browser proxy traffic."
 
 Developer: "Do I need to know which listener browsers use?"
 
@@ -592,7 +668,7 @@ QA engineer: "Restart-Applied Lifecycle means they apply on the next gateway sta
 
 Developer: "What happens if the gateway crashes after changing my proxy settings?"
 
-QA engineer: "Runtime Cleanup removes leftover seamless-cors-owned PAC settings before a new start or stop finishes."
+QA engineer: "Gateway Footprint Cleanup removes leftover seamless-cors-owned managed PAC settings before a new start or stop finishes."
 
 Developer: "What if I already use a corporate proxy?"
 
@@ -606,25 +682,25 @@ Developer: "Where do config files live by default?"
 
 QA engineer: "Home Config Directory keeps them under `.seamless-cors` in the user's home directory."
 
-Developer: "Where do runtime cleanup files live?"
+Developer: "Where does the Gateway State Cache live?"
 
 QA engineer: "Runtime State Directory keeps runtime coordination state and product-owned cleanup files under the Home Config Directory."
 
-Developer: "How do stop and status find the running gateway?"
+Developer: "How do client commands find the Gateway Owner?"
 
-QA engineer: "They read the Runtime State File to find the active Control Endpoint."
+QA engineer: "They read the Gateway State Cache to find the active Gateway Router and authenticate with its token."
 
-Developer: "Does a Runtime State File always mean the gateway is still running?"
+Developer: "Does a Gateway State Cache always mean the gateway is still running?"
 
-QA engineer: "No, Runtime State Verification checks the Control Endpoint before treating it as an active instance."
+QA engineer: "No, Gateway State Verification checks the Gateway Router before treating it as an active owner."
 
 Developer: "Will cleanup modify state just because it looks suspicious?"
 
-QA engineer: "No, Footprint-Based Cleanup acts only on state proven by a seamless-cors ownership footprint."
+QA engineer: "No, Marker-Based Cleanup acts only on state proven by a seamless-cors Ownership Marker."
 
-Developer: "Can I run two gateways at once?"
+Developer: "Can I run two gateway owners at once?"
 
-QA engineer: "No, Single User Instance uses the Runtime State File to guard active gateway state."
+QA engineer: "No, Single User Instance uses the Gateway State Cache to guard active gateway ownership."
 
 Developer: "Can config paths use `~` or environment variables?"
 
@@ -660,7 +736,7 @@ QA engineer: "Line-Level Domain Validation reports the invalid line, and Invalid
 
 Developer: "What if I save an invalid Domain List while the gateway is running?"
 
-QA engineer: "Fatal Domain List Error reports the line-level validation problem, performs Runtime Cleanup, and stops the gateway."
+QA engineer: "Fatal Domain List Error reports the line-level validation problem, performs Gateway Footprint Cleanup, and stops the gateway."
 
 Developer: "Does `api.dev.example.com` include its subdomains?"
 

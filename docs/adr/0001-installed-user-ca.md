@@ -4,4 +4,4 @@ The gateway keeps one long-lived seamless-cors-owned development CA in the curre
 
 The local CA signing key is stored as current-user-readable product state protected by file permissions, not encrypted at rest. Encrypting the key would reintroduce repeated unlock prompts or require a local secret-store dependency, which conflicts with the goal of avoiding trust friction during normal trusted starts.
 
-CA Ensure reuses only a fully usable installed CA: one owned current-user trust footprint, matching local CA certificate and key, acceptable validity, and local permissions that can be tightened if needed. Other unusable states are repaired by removing owned CA state and installing fresh CA material, so the lifecycle avoids partial reuse of stale or ambiguous trust material.
+CA Ensure reuses only a fully usable installed CA: one owned current-user trust identity, matching local CA certificate and key, acceptable validity, and local permissions that can be tightened if needed. Other unusable states are repaired by removing owned CA state and installing fresh CA material, so the lifecycle avoids partial reuse of stale or ambiguous trust material.

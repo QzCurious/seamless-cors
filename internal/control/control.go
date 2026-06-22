@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -16,6 +17,7 @@ type State struct {
 	ProxyListen      string   `json:"proxyListen"`
 	PACListen        string   `json:"pacListen"`
 	ControlListen    string   `json:"controlListen"`
+	RuntimeActive    bool     `json:"runtimeActive"`
 	DomainList       string   `json:"domainList"`
 	CATrusted        bool     `json:"caTrusted"`
 	DomainCount      int      `json:"domainCount"`
@@ -26,11 +28,17 @@ type Server struct {
 	server *http.Server
 	token  string
 	state  atomic.Value
+	onStop func() error
+	stopMu sync.Mutex
 }
 
 func New(state State, token string) *Server {
+	return NewWithStop(state, token, nil)
+}
+
+func NewWithStop(state State, token string, onStop func() error) *Server {
 	mux := http.NewServeMux()
-	s := &Server{token: token}
+	s := &Server{token: token, onStop: onStop}
 	s.SetState(state)
 	mux.HandleFunc("/status", func(w http.ResponseWriter, req *http.Request) {
 		if !s.authorized(req) {
@@ -44,6 +52,15 @@ func New(state State, token string) *Server {
 		if !s.authorized(req) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
+		}
+		if s.onStop != nil {
+			s.stopMu.Lock()
+			err := s.onStop()
+			s.stopMu.Unlock()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		w.WriteHeader(http.StatusAccepted)
 		go func() {
@@ -103,6 +120,11 @@ func CallStatus(baseURL, token string, stdout io.Writer) error {
 		fmt.Fprintln(stdout, "seamless-cors status: not running")
 		return nil
 	}
+	if !state.RuntimeActive {
+		fmt.Fprintln(stdout, "seamless-cors status: owner running")
+		fmt.Fprintln(stdout, "gateway-runtime: inactive")
+		return nil
+	}
 	fmt.Fprintln(stdout, "seamless-cors status: running")
 	fmt.Fprintf(stdout, "runtime-proxy-endpoint: %s\n", state.ProxyListen)
 	fmt.Fprintf(stdout, "runtime-pac-endpoint: %s\n", state.PACListen)
@@ -126,6 +148,10 @@ func CallStop(baseURL, token string, stdout io.Writer) (bool, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
+		if resp.StatusCode == http.StatusInternalServerError {
+			body, _ := io.ReadAll(resp.Body)
+			return false, fmt.Errorf("gateway stop failed: %s", strings.TrimSpace(string(body)))
+		}
 		fmt.Fprintln(stdout, "seamless-cors stop requested; no running seamless-cors found")
 		return false, nil
 	}

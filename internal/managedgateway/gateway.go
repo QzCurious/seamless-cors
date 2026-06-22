@@ -20,11 +20,10 @@ import (
 	"seamless-cors/internal/cleanup"
 	"seamless-cors/internal/config"
 	"seamless-cors/internal/control"
-	"seamless-cors/internal/corsproxy"
+	"seamless-cors/internal/gatewaycoord"
+	"seamless-cors/internal/gatewayruntime"
 	"seamless-cors/internal/liveconfig"
-	"seamless-cors/internal/pacrouting"
 	"seamless-cors/internal/platform"
-	"seamless-cors/internal/runtimecoord"
 	"seamless-cors/internal/userca"
 )
 
@@ -48,6 +47,16 @@ func StartWithContextAndInput(ctx context.Context, stdin io.Reader, stdout io.Wr
 	}.Start(ctx)
 }
 
+func Serve(stdout, _ io.Writer) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return ServeWithContext(ctx, stdout, platform.CurrentAdapter)
+}
+
+func ServeWithContext(ctx context.Context, stdout io.Writer, adapter platform.Adapter) error {
+	return Gateway{Stdout: stdout, Adapter: adapter}.ServeOwner(ctx)
+}
+
 type Gateway struct {
 	Stdin   io.Reader
 	Stdout  io.Writer
@@ -66,10 +75,10 @@ func (g Gateway) Start(ctx context.Context) error {
 	if err := requireSupported(adapter.Capabilities()); err != nil {
 		return err
 	}
-	if active, err := activeRuntimeState(); err != nil {
+	if active, err := activeOwnerState(); err != nil {
 		return err
 	} else if active {
-		fmt.Fprintln(stdout, "seamless-cors is already running")
+		fmt.Fprintln(stdout, "gateway owner already running")
 		return nil
 	}
 	if err := cleanRuntime(adapter); err != nil {
@@ -96,6 +105,67 @@ func (g Gateway) Start(ctx context.Context) error {
 		return err
 	}
 	return g.serveRuntime(ctx, runtime)
+}
+
+func (g Gateway) ServeOwner(ctx context.Context) error {
+	stdout := g.Stdout
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	adapter := g.Adapter
+	if adapter == nil {
+		adapter = platform.CurrentAdapter
+	}
+	if err := requireSupported(adapter.Capabilities()); err != nil {
+		return err
+	}
+	coord, err := gatewaycoord.Default()
+	if err != nil {
+		return err
+	}
+	if coord.Verify().Status == gatewaycoord.Active {
+		return fmt.Errorf("gateway owner already running")
+	}
+	token, err := randomToken()
+	if err != nil {
+		return err
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("router listener unavailable: %w", err)
+	}
+	routerListen := listener.Addr().String()
+	cache := gatewaycoord.GatewayStateCache{HTTPRouterListen: routerListen, Token: token}
+	router := control.NewWithStop(control.State{
+		RuntimeActive: false,
+		ControlListen: routerListen,
+	}, token, func() error {
+		return coord.RemoveOwned(cache)
+	})
+	errs := make(chan error, 1)
+	go func() { errs <- router.Serve(listener) }()
+
+	if err := coord.Claim(cache); err != nil {
+		_ = router.Close(context.Background())
+		return err
+	}
+	fmt.Fprintln(stdout, "gateway owner running")
+	defer coord.RemoveOwned(cache)
+	leaseLost := watchLease(ctx, coord, cache)
+
+	select {
+	case <-ctx.Done():
+		_ = router.Close(context.Background())
+		return nil
+	case <-leaseLost:
+		_ = router.Close(context.Background())
+		return nil
+	case err := <-errs:
+		if err == nil || err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	}
 }
 
 func writeStartGuidance(stdout io.Writer, live liveconfig.Config) {
@@ -133,7 +203,7 @@ func promptForLifecycleConsent(stdin io.Reader, stdout io.Writer, req lifecycleC
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stdout, "Managed PAC Consent:")
 		fmt.Fprintln(stdout, "seamless-cors will replace existing managed PAC state for this run.")
-		fmt.Fprintln(stdout, "Runtime Cleanup removes seamless-cors PAC settings without restoring previous PAC state.")
+		fmt.Fprintln(stdout, "Gateway Footprint Cleanup removes seamless-cors-owned managed PAC settings without restoring previous PAC state.")
 		fmt.Fprintln(stdout, "Current managed PAC state:")
 		for _, state := range req.CurrentPACState {
 			if state.URL == "" {
@@ -169,87 +239,39 @@ func readYes(stdin io.Reader) (bool, error) {
 }
 
 type runtime struct {
-	mu         sync.RWMutex
 	live       liveconfig.Config
 	adapter    platform.Adapter
 	stdout     io.Writer
-	authority  *userca.Authority
-	proxy      *http.Server
-	pacHandler *pacrouting.DynamicHandler
-	pac        *http.Server
-	control    *control.Server
-	listeners  []net.Listener
-	token      string
+	engine     *gatewayruntime.Runtime
 	runtimeDir string
-	coord      *runtimecoord.Coordinator
-	liveConfig *liveconfig.Source
+	coord      *gatewaycoord.Coordinator
+	cache      gatewaycoord.GatewayStateCache
+	cleanupMu  sync.Mutex
+	cleaned    bool
 }
 
 func newRuntimeFromLiveConfig(source *liveconfig.Source, live liveconfig.Config, adapter platform.Adapter, stdout io.Writer) (*runtime, error) {
-	cfg := live.Effective()
-	entries := live.Entries()
-	if err := config.Validate(cfg); err != nil {
-		return nil, err
-	}
-	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, fmt.Errorf("proxy listener unavailable: %w", err)
-	}
-	pacListener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		proxyListener.Close()
-		return nil, fmt.Errorf("PAC listener unavailable: %w", err)
-	}
-	controlListener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		proxyListener.Close()
-		pacListener.Close()
-		return nil, fmt.Errorf("control listener unavailable: %w", err)
-	}
-
 	runtimeDir, err := config.RuntimeDir()
 	if err != nil {
-		proxyListener.Close()
-		pacListener.Close()
-		controlListener.Close()
 		return nil, err
 	}
 	token, err := randomToken()
 	if err != nil {
-		proxyListener.Close()
-		pacListener.Close()
-		controlListener.Close()
 		return nil, err
 	}
-	proxyListen := proxyListener.Addr().String()
-	pacListen := pacListener.Addr().String()
-	controlListen := controlListener.Addr().String()
-
-	pacBody := pacrouting.Generate(pacrouting.Options{ProxyListen: proxyListen, CATrusted: live.CATrusted(), Entries: entries})
-	pacHandler := pacrouting.NewDynamicHandler(pacBody)
-	controlServer := control.New(control.State{
-		ProxyListen:      proxyListen,
-		PACListen:        pacListen,
-		ControlListen:    controlListen,
-		DomainList:       live.DomainListPath(),
-		CATrusted:        live.CATrusted(),
-		DomainCount:      len(entries),
-		PendingLifecycle: live.PendingLifecycle(),
-	}, token)
-	return &runtime{
+	r := &runtime{
 		live:       live,
 		adapter:    adapter,
 		stdout:     stdout,
-		liveConfig: source,
-		pacHandler: pacHandler,
-		proxy:      &http.Server{},
-		pac:        &http.Server{Handler: pacHandler},
-		control:    controlServer,
-		listeners:  []net.Listener{proxyListener, pacListener, controlListener},
-		token:      token,
 		runtimeDir: runtimeDir,
-		coord:      runtimecoord.New(runtimeDir),
-	}, nil
+		coord:      gatewaycoord.New(runtimeDir),
+	}
+	engine, err := gatewayruntime.NewWithStop(source, live, token, r.stopFromRouter)
+	if err != nil {
+		return nil, err
+	}
+	r.engine = engine
+	return r, nil
 }
 
 func (r *runtime) Serve(ctx context.Context) error {
@@ -280,58 +302,65 @@ func (g Gateway) serveRuntime(ctx context.Context, r *runtime) error {
 			}
 			return err
 		}
-		r.authority = authority
+		if err := r.engine.SetAuthority(authority); err != nil {
+			r.Close()
+			return err
+		}
 		if result.Changed {
 			fmt.Fprintln(r.stdout, "Installed User CA added to the current user's SSL trust settings.")
 		}
-	}
-	proxyHandler, err := corsproxy.New(corsproxy.Options{
-		CATrusted: r.live.CATrusted(),
-		Authority: r.authority,
-	})
-	if err != nil {
-		r.Close()
-		return err
-	}
-	r.proxy.Handler = proxyHandler
-
-	errs := make(chan error, 4)
-	go func() { errs <- r.control.Serve(r.listeners[2]) }()
-
-	if err := r.adapter.InstallPAC("http://" + r.listeners[1].Addr().String() + "/" + platform.PACFootprintFileName); err != nil {
-		r.Close()
-		return err
-	}
-	state := runtimecoord.RuntimeState{State: r.controlState(), Token: r.token}
-	if err := r.writeRuntimeState(state); err != nil {
+	} else if err := r.engine.SetAuthority(nil); err != nil {
 		r.Close()
 		return err
 	}
 
-	go r.watchLiveConfig(ctx, errs)
-	go func() { errs <- r.proxy.Serve(r.listeners[0]) }()
-	go func() { errs <- r.pac.Serve(r.listeners[1]) }()
+	if err := r.adapter.InstallPAC(r.engine.PACURL()); err != nil {
+		r.Close()
+		return err
+	}
+	cache := gatewaycoord.GatewayStateCache{HTTPRouterListen: r.engine.RouterListen(), Token: r.engine.Token()}
+	if err := r.writeGatewayStateCache(cache); err != nil {
+		r.Close()
+		return err
+	}
+
 	writeStartGuidance(r.stdout, r.live)
-
-	select {
-	case <-ctx.Done():
-		return r.Close()
-	case err := <-errs:
-		if err == http.ErrServerClosed {
-			return r.Close()
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-watchLease(runCtx, r.coord, cache):
+			cancel()
+		case <-runCtx.Done():
 		}
-		r.Close()
+	}()
+	if err := r.engine.Serve(runCtx); err != nil {
+		_ = r.cleanup()
 		return err
 	}
+	return r.cleanup()
 }
 
 func (r *runtime) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 0)
-	defer cancel()
-	_ = r.proxy.Close()
-	_ = r.pac.Close()
-	_ = r.control.Close(ctx)
-	return cleanup.Clean(r.runtimeDir, r.adapter)
+	return r.engine.Close()
+}
+
+func (r *runtime) cleanup() error {
+	r.cleanupMu.Lock()
+	defer r.cleanupMu.Unlock()
+	if r.cleaned {
+		return nil
+	}
+	err := cleanup.CleanOwned(r.runtimeDir, r.adapter, r.cache)
+	if err == nil {
+		r.cleaned = true
+	}
+	return err
+}
+
+func (r *runtime) stopFromRouter() error {
+	_ = r.engine.CloseTraffic()
+	return r.cleanup()
 }
 
 func Stop(stdout, _ io.Writer) error {
@@ -347,21 +376,21 @@ func (g Gateway) Stop() error {
 	if adapter == nil {
 		adapter = platform.CurrentAdapter
 	}
-	coord, err := runtimecoord.Default()
+	coord, err := gatewaycoord.Default()
 	if err != nil {
 		return err
 	}
 	verification := coord.Verify()
-	if verification.Status != runtimecoord.Active {
+	if verification.Status != gatewaycoord.Active {
 		fmt.Fprintln(stdout, "seamless-cors stop requested; no running seamless-cors found")
 		return cleanRuntime(adapter)
 	}
-	stopped, err := control.CallStop("http://"+verification.State.ControlListen, verification.State.Token, stdout)
+	stopped, err := control.CallStop("http://"+verification.Cache.HTTPRouterListen, verification.Cache.Token, stdout)
 	if err != nil {
 		return err
 	}
 	if stopped {
-		runtimecoord.WaitForStop(verification.State)
+		gatewaycoord.WaitForStop(verification.Cache)
 	}
 	return cleanRuntime(adapter)
 }
@@ -379,25 +408,25 @@ func (g Gateway) Status() error {
 	if adapter == nil {
 		adapter = platform.CurrentAdapter
 	}
-	coord, err := runtimecoord.Default()
+	coord, err := gatewaycoord.Default()
 	if err != nil {
 		return err
 	}
 	verification := coord.Verify()
-	if verification.Status == runtimecoord.Missing {
+	if verification.Status == gatewaycoord.Missing {
 		fmt.Fprintln(stdout, "seamless-cors status: not running")
 		reportCAHealth(stdout, adapter)
 		reportCleanupNeeded(stdout, adapter, false)
 		return nil
 	}
-	if verification.Status == runtimecoord.Stale {
+	if verification.Status == gatewaycoord.Stale {
 		fmt.Fprintln(stdout, "seamless-cors status: not running")
 		reportCAHealth(stdout, adapter)
-		fmt.Fprintln(stdout, "stale runtime state detected; run start or stop to clean up")
+		fmt.Fprintln(stdout, "stale Gateway State Cache detected; run start or stop to clean up")
 		reportCleanupNeeded(stdout, adapter, true)
 		return nil
 	}
-	if err := control.CallStatus("http://"+verification.State.ControlListen, verification.State.Token, stdout); err != nil {
+	if err := control.CallStatus("http://"+verification.Cache.HTTPRouterListen, verification.Cache.Token, stdout); err != nil {
 		return err
 	}
 	reportCAHealth(stdout, adapter)
@@ -415,73 +444,32 @@ func (r *runtime) ensureSingleInstance() error {
 	return nil
 }
 
-func (r *runtime) writeRuntimeState(state runtimecoord.RuntimeState) error {
-	if err := r.coord.Write(state); err == nil {
-		return nil
-	} else if !os.IsExist(err) {
+func (r *runtime) writeGatewayStateCache(cache gatewaycoord.GatewayStateCache) error {
+	if err := r.coord.Claim(cache); err != nil {
 		return err
 	}
-	if r.coord.Verify().Status == runtimecoord.Active {
-		return fmt.Errorf("seamless-cors is already running")
-	}
-	if err := cleanup.Clean(r.runtimeDir, r.adapter); err != nil {
-		return err
-	}
-	return r.coord.Write(state)
+	r.cache = cache
+	return nil
 }
 
-func (r *runtime) watchLiveConfig(ctx context.Context, errs chan<- error) {
-	events := r.liveConfig.Watch(ctx, 100*time.Millisecond)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-events:
-			if !ok {
+func watchLease(ctx context.Context, coord *gatewaycoord.Coordinator, cache gatewaycoord.GatewayStateCache) <-chan struct{} {
+	lost := make(chan struct{})
+	go func() {
+		defer close(lost)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
 				return
-			}
-			if event.Err != nil {
-				select {
-				case errs <- event.Err:
-				case <-ctx.Done():
+			case <-ticker.C:
+				if !coord.Owns(cache) {
+					return
 				}
-				return
 			}
-			r.applyLiveConfig(event.Config)
 		}
-	}
-}
-
-func (r *runtime) applyLiveConfig(live liveconfig.Config) {
-	r.mu.Lock()
-	r.live = live
-	state := r.controlStateLocked()
-	r.mu.Unlock()
-	r.pacHandler.Set(pacrouting.Generate(pacrouting.Options{
-		ProxyListen: r.listeners[0].Addr().String(),
-		CATrusted:   live.CATrusted(),
-		Entries:     live.Entries(),
-	}))
-	r.control.SetState(state)
-}
-
-func (r *runtime) controlState() control.State {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.controlStateLocked()
-}
-
-func (r *runtime) controlStateLocked() control.State {
-	entries := r.live.Entries()
-	return control.State{
-		ProxyListen:      r.listeners[0].Addr().String(),
-		PACListen:        r.listeners[1].Addr().String(),
-		ControlListen:    r.listeners[2].Addr().String(),
-		DomainList:       r.live.DomainListPath(),
-		CATrusted:        r.live.CATrusted(),
-		DomainCount:      len(entries),
-		PendingLifecycle: r.live.PendingLifecycle(),
-	}
+	}()
+	return lost
 }
 
 func randomToken() (string, error) {
@@ -500,16 +488,28 @@ func cleanRuntime(adapter cleanup.Adapter) error {
 	return cleanup.Clean(runtimeDir, adapter)
 }
 
-func activeRuntimeState() (bool, error) {
-	coord, err := runtimecoord.Default()
+func activeOwnerState() (bool, error) {
+	coord, err := gatewaycoord.Default()
 	if err != nil {
 		return false, err
 	}
-	return coord.Verify().Status == runtimecoord.Active, nil
+	return coord.Verify().Status == gatewaycoord.Active, nil
 }
 
 func Running() (bool, error) {
-	return activeRuntimeState()
+	coord, err := gatewaycoord.Default()
+	if err != nil {
+		return false, err
+	}
+	verification := coord.Verify()
+	if verification.Status != gatewaycoord.Active {
+		return false, nil
+	}
+	state, err := control.FetchStatus("http://"+verification.Cache.HTTPRouterListen, verification.Cache.Token)
+	if err != nil {
+		return false, nil
+	}
+	return state.RuntimeActive, nil
 }
 
 func reportCleanupNeeded(stdout io.Writer, adapter platform.Adapter, staleState bool) {
@@ -518,7 +518,7 @@ func reportCleanupNeeded(stdout io.Writer, adapter platform.Adapter, staleState 
 		return
 	}
 	if cleanup.Inspect(runtimeDir, adapter, staleState).Needed() {
-		fmt.Fprintln(stdout, "cleanup-needed: run `seamless-cors stop` to clean seamless-cors-owned runtime state")
+		fmt.Fprintln(stdout, "cleanup-needed: run `seamless-cors stop` to clean seamless-cors-owned gateway footprint")
 	}
 }
 

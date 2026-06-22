@@ -15,10 +15,9 @@ import (
 	"time"
 
 	"seamless-cors/internal/config"
-	"seamless-cors/internal/control"
+	"seamless-cors/internal/gatewaycoord"
 	"seamless-cors/internal/liveconfig"
 	"seamless-cors/internal/platform"
-	"seamless-cors/internal/runtimecoord"
 	"seamless-cors/internal/userca"
 )
 
@@ -30,6 +29,7 @@ type fakeAdapter struct {
 	cleanedCA    int
 	caRecords    []platform.CARecord
 	trustErr     error
+	clearErr     error
 	trustStarted chan struct{}
 	releaseTrust chan struct{}
 }
@@ -52,7 +52,7 @@ func (f *fakeAdapter) CurrentPACState() ([]platform.PACServiceState, error) {
 }
 func (f *fakeAdapter) ClearOwnedPAC() error {
 	f.clearedPAC++
-	return nil
+	return f.clearErr
 }
 func (f *fakeAdapter) TrustedCAs() ([]platform.CARecord, error) {
 	return append([]platform.CARecord(nil), f.caRecords...), nil
@@ -394,6 +394,215 @@ func TestStartWithVerifiedActiveGatewaySkipsCleanupAndConfigValidation(t *testin
 	}
 }
 
+func TestServeOwnerPublishesRouterOnlyOwnerWithoutManagedPAC(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	fake := &fakeAdapter{}
+	var out bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+
+	go func() { done <- (Gateway{Adapter: fake, Stdout: &out}).ServeOwner(ctx) }()
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
+	waitForStatusOutput(t, "gateway-runtime: inactive")
+
+	if fake.installedPAC != "" || fake.clearedPAC != 0 || fake.trusted != 0 {
+		t.Fatalf("serve mutated lifecycle state: PAC=%q cleared=%d trusted=%d", fake.installedPAC, fake.clearedPAC, fake.trusted)
+	}
+	if running, err := Running(); err != nil {
+		t.Fatal(err)
+	} else if running {
+		t.Fatal("router-only owner should not report Gateway Runtime as running")
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStartWithRouterOnlyOwnerFailsWithoutDelegatingOrCleanup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ownerAdapter := &fakeAdapter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- (Gateway{Adapter: ownerAdapter, Stdout: io.Discard}).ServeOwner(ctx) }()
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
+
+	startAdapter := &fakeAdapter{}
+	var out bytes.Buffer
+	if err := StartWithContextAndInput(context.Background(), bytes.NewBufferString(""), &out, startAdapter); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "gateway owner already running") {
+		t.Fatalf("start output = %q", out.String())
+	}
+	if startAdapter.clearedPAC != 0 || startAdapter.installedPAC != "" {
+		t.Fatalf("owner-blocked start mutated lifecycle state: cleared=%d PAC=%q", startAdapter.clearedPAC, startAdapter.installedPAC)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServeOwnerMayClaimStaleCacheWithoutGatewayFootprintCleanup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeStaleRuntimeState(t)
+	fake := &fakeAdapter{
+		pacStates: []platform.PACServiceState{{
+			Name:    "Wi-Fi",
+			URL:     "http://127.0.0.1:8079/seamless-cors.pac",
+			Enabled: true,
+		}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+
+	go func() { done <- (Gateway{Adapter: fake, Stdout: io.Discard}).ServeOwner(ctx) }()
+	waitForStatusOutput(t, "gateway-runtime: inactive")
+
+	if fake.clearedPAC != 0 {
+		t.Fatalf("serve cleaned PAC for stale cache: %d", fake.clearedPAC)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServeOwnerExitsWhenGatewayStateLeaseIsLost(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- (Gateway{Adapter: &fakeAdapter{}, Stdout: io.Discard}).ServeOwner(ctx) }()
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
+	runtimeDir, err := config.RuntimeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	coord := gatewaycoord.New(runtimeDir)
+
+	if err := coord.Remove(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serve owner did not exit after lease loss")
+	}
+}
+
+func TestRuntimeOwnerCleansUpWhenGatewayStateLeaseIsLost(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".seamless-cors")
+	domainPath := filepath.Join(configDir, "domains.txt")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeConfigForRuntime(t, filepath.Join(configDir, "config.yaml"), config.Config{
+		DomainList: domainPath,
+		CATrusted:  false,
+	})
+	if err := os.WriteFile(domainPath, []byte("api.example.test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeAdapter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake) }()
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
+	runtimeDir, err := config.RuntimeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	coord := gatewaycoord.New(runtimeDir)
+
+	if err := coord.Remove(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime owner did not exit after lease loss")
+	}
+	if fake.clearedPAC == 0 {
+		t.Fatal("runtime owner did not run Gateway Footprint Cleanup after lease loss")
+	}
+}
+
+func TestStopReportsOwnerCleanupFailureAndKeepsOwnerForRetry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".seamless-cors")
+	domainPath := filepath.Join(configDir, "domains.txt")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeConfigForRuntime(t, filepath.Join(configDir, "config.yaml"), config.Config{
+		DomainList: domainPath,
+		CATrusted:  false,
+	})
+	if err := os.WriteFile(domainPath, []byte("api.example.test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeAdapter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake) }()
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
+
+	fake.clearErr = errors.New("pac cleanup denied")
+	var out bytes.Buffer
+	err := (Gateway{Adapter: fake, Stdout: &out}).Stop()
+	if err == nil || !strings.Contains(err.Error(), "pac cleanup denied") {
+		t.Fatalf("stop error = %v", err)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("owner exited after failed cleanup: %v", err)
+	default:
+	}
+	if active, err := activeOwnerState(); err != nil {
+		t.Fatal(err)
+	} else if !active {
+		t.Fatal("owner was not reachable after failed cleanup")
+	}
+
+	fake.clearErr = nil
+	out.Reset()
+	if err := (Gateway{Adapter: fake, Stdout: &out}).Stop(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("owner did not exit after successful cleanup retry")
+	}
+}
+
 func TestStatusAndStopDoNotBootstrapMissingConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -422,7 +631,7 @@ func TestStatusAndStopDoNotBootstrapMissingConfig(t *testing.T) {
 	}
 }
 
-func TestStatusReportsStaleRuntimeStateWithoutCleanup(t *testing.T) {
+func TestStatusReportsStaleGatewayStateCacheWithoutCleanup(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	statePath := writeStaleRuntimeState(t)
@@ -434,7 +643,7 @@ func TestStatusReportsStaleRuntimeStateWithoutCleanup(t *testing.T) {
 	if !strings.Contains(out.String(), "not running") {
 		t.Fatalf("status output = %q", out.String())
 	}
-	if !strings.Contains(out.String(), "stale runtime state detected") {
+	if !strings.Contains(out.String(), "stale Gateway State Cache detected") {
 		t.Fatalf("status output = %q", out.String())
 	}
 	if _, err := os.Stat(statePath); err != nil {
@@ -442,7 +651,7 @@ func TestStatusReportsStaleRuntimeStateWithoutCleanup(t *testing.T) {
 	}
 }
 
-func TestStopCleansStaleRuntimeState(t *testing.T) {
+func TestStopCleansStaleGatewayStateCache(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	statePath := writeStaleRuntimeState(t)
@@ -455,7 +664,7 @@ func TestStopCleansStaleRuntimeState(t *testing.T) {
 		t.Fatalf("stop output = %q", out.String())
 	}
 	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
-		t.Fatalf("stale runtime state still exists: %v", err)
+		t.Fatalf("stale Gateway State Cache still exists: %v", err)
 	}
 }
 
@@ -507,7 +716,7 @@ func TestManagedGatewayReloadsDomainListIntoGeneratedPAC(t *testing.T) {
 	go func() { done <- runtime.Serve(ctx) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
 
-	pacURL := "http://" + runtime.listeners[1].Addr().String() + "/seamless-cors.pac"
+	pacURL := runtime.engine.PACURL()
 	waitForHTTPBody(t, pacURL, "api-one.example.test")
 
 	if err := os.WriteFile(domainPath, []byte("api-two.example.test\n"), 0o600); err != nil {
@@ -538,7 +747,7 @@ func TestManagedGatewayStopsOnInvalidLiveDomainList(t *testing.T) {
 	go func() { done <- runtime.Serve(ctx) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
 
-	pacURL := "http://" + runtime.listeners[1].Addr().String() + "/seamless-cors.pac"
+	pacURL := runtime.engine.PACURL()
 	waitForHTTPBody(t, pacURL, "api-one.example.test")
 
 	if err := os.WriteFile(domainPath, []byte("api-two.example.test\nhttps://*.bad.example.test\n"), 0o600); err != nil {
@@ -573,7 +782,7 @@ func TestManagedGatewayAppliesEmptyLiveDomainList(t *testing.T) {
 	go func() { done <- runtime.Serve(ctx) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
 
-	pacURL := "http://" + runtime.listeners[1].Addr().String() + "/seamless-cors.pac"
+	pacURL := runtime.engine.PACURL()
 	waitForHTTPBody(t, pacURL, "api-one.example.test")
 
 	if err := os.WriteFile(domainPath, []byte("# no active domains\n\n"), 0o600); err != nil {
@@ -623,7 +832,7 @@ func TestManagedGatewayLiveConfigFollowsConfigDomainList(t *testing.T) {
 	go func() { done <- runtime.Serve(ctx) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
 
-	pacURL := "http://" + runtime.listeners[1].Addr().String() + "/seamless-cors.pac"
+	pacURL := runtime.engine.PACURL()
 	waitForHTTPBody(t, pacURL, "first.example.test")
 	waitForStatusOutput(t, "domain-list: "+firstDomainPath)
 
@@ -760,17 +969,15 @@ func writeStaleRuntimeState(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	coord := runtimecoord.New(runtimeDir)
-	err = coord.Write(runtimecoord.RuntimeState{
-		State: control.State{
-			ControlListen: "127.0.0.1:1",
-		},
-		Token: "stale-token",
+	coord := gatewaycoord.New(runtimeDir)
+	err = coord.Write(gatewaycoord.GatewayStateCache{
+		HTTPRouterListen: "127.0.0.1:1",
+		Token:            "stale-token",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(runtimeDir, runtimecoord.StateFileName)
+	return filepath.Join(runtimeDir, gatewaycoord.StateFileName)
 }
 
 func waitForFile(t *testing.T, path string) {

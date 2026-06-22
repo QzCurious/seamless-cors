@@ -171,6 +171,33 @@ func TestUninstallRefusesWhileManagedGatewayIsRunning(t *testing.T) {
 	}
 }
 
+func TestUninstallAllowsRouterOnlyGatewayOwner(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	fake := &fakeAdapter{}
+	restoreAdapter(t, fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- managedgateway.ServeWithContext(ctx, io.Discard, fake)
+	}()
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
+
+	var out bytes.Buffer
+	if err := Uninstall(&out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Installed User CA uninstalled.") {
+		t.Fatalf("uninstall output = %q", out.String())
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func restoreAdapter(t *testing.T, adapter platform.Adapter) {
 	t.Helper()
 	previous := platform.CurrentAdapter

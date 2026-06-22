@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"seamless-cors/internal/gatewaycoord"
 	"seamless-cors/internal/platform"
 )
 
@@ -26,7 +27,7 @@ func (f *fakeAdapter) ClearOwnedPAC() error {
 	return f.clearErr
 }
 
-func TestInspectReportsOwnedFootprintWithoutMutating(t *testing.T) {
+func TestInspectReportsOwnershipMarkersWithoutMutating(t *testing.T) {
 	runtimeDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(runtimeDir, "control-state.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
@@ -43,22 +44,17 @@ func TestInspectReportsOwnedFootprintWithoutMutating(t *testing.T) {
 	inspection := Inspect(runtimeDir, adapter, true)
 
 	if !inspection.Needed() {
-		t.Fatal("owned footprint should require cleanup")
+		t.Fatal("owned marker should require cleanup")
 	}
-	if !inspection.StaleRuntimeState || !inspection.OwnedPAC {
+	if !inspection.StaleGatewayStateCache || !inspection.OwnedPAC || !inspection.GatewayStateCache {
 		t.Fatalf("inspection = %#v", inspection)
-	}
-	if got := strings.Join(inspection.RuntimeFiles, ","); got != "control-state.json" {
-		t.Fatalf("runtime files = %q", got)
 	}
 }
 
-func TestCleanRemovesOwnedRuntimeFilesAndCallsAdapters(t *testing.T) {
+func TestCleanRemovesGatewayStateCacheAndOwnedPAC(t *testing.T) {
 	runtimeDir := t.TempDir()
-	for _, name := range []string{"control-state.json"} {
-		if err := os.WriteFile(filepath.Join(runtimeDir, name), []byte("owned"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(runtimeDir, "control-state.json"), []byte("owned"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	adapter := &fakeAdapter{}
 
@@ -95,5 +91,26 @@ func TestCleanGroupsFailuresWithRetryGuidance(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("cleanup error missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestCleanOwnedPreservesGatewayStateCacheWhenPACCleanupFails(t *testing.T) {
+	runtimeDir := t.TempDir()
+	coord := gatewaycoord.New(runtimeDir)
+	cache := gatewaycoord.GatewayStateCache{
+		HTTPRouterListen: "127.0.0.1:49152",
+		Token:            "secret-token",
+	}
+	if err := coord.Write(cache); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &fakeAdapter{clearErr: errors.New("pac denied")}
+
+	err := CleanOwned(runtimeDir, adapter, cache)
+	if err == nil {
+		t.Fatal("expected cleanup error")
+	}
+	if !coord.Owns(cache) {
+		t.Fatal("owned Gateway State Cache was removed after failed PAC cleanup")
 	}
 }

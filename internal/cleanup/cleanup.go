@@ -6,10 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"seamless-cors/internal/gatewaycoord"
 	"seamless-cors/internal/platform"
 )
-
-var ownedRuntimeFiles = []string{"control-state.json"}
 
 type Inspector interface {
 	CurrentPACState() ([]platform.PACServiceState, error)
@@ -25,17 +24,15 @@ type Adapter interface {
 }
 
 type Inspection struct {
-	StaleRuntimeState bool
-	RuntimeFiles      []string
-	OwnedPAC          bool
+	StaleGatewayStateCache bool
+	GatewayStateCache      bool
+	OwnedPAC               bool
 }
 
 func Inspect(runtimeDir string, adapter Inspector, staleRuntimeState bool) Inspection {
-	inspection := Inspection{StaleRuntimeState: staleRuntimeState}
-	for _, name := range ownedRuntimeFiles {
-		if _, err := os.Stat(filepath.Join(runtimeDir, name)); err == nil {
-			inspection.RuntimeFiles = append(inspection.RuntimeFiles, name)
-		}
+	inspection := Inspection{StaleGatewayStateCache: staleRuntimeState}
+	if _, err := os.Stat(filepath.Join(runtimeDir, gatewaycoord.StateFileName)); err == nil {
+		inspection.GatewayStateCache = true
 	}
 	if states, err := adapter.CurrentPACState(); err == nil && platform.HasOwnedPACState(states) {
 		inspection.OwnedPAC = true
@@ -44,19 +41,34 @@ func Inspect(runtimeDir string, adapter Inspector, staleRuntimeState bool) Inspe
 }
 
 func (i Inspection) Needed() bool {
-	return i.StaleRuntimeState || len(i.RuntimeFiles) > 0 || i.OwnedPAC
+	return i.StaleGatewayStateCache || i.GatewayStateCache || i.OwnedPAC
 }
 
 func Clean(runtimeDir string, adapter Cleaner) error {
+	return clean(runtimeDir, adapter, nil)
+}
+
+func CleanOwned(runtimeDir string, adapter Cleaner, cache gatewaycoord.GatewayStateCache) error {
+	return clean(runtimeDir, adapter, &cache)
+}
+
+func clean(runtimeDir string, adapter Cleaner, ownedCache *gatewaycoord.GatewayStateCache) error {
 	var errs []error
 	if err := adapter.ClearOwnedPAC(); err != nil {
 		errs = append(errs, fmt.Errorf("managed PAC cleanup failed: %w", err))
 	}
-	for _, name := range ownedRuntimeFiles {
-		err := os.Remove(filepath.Join(runtimeDir, name))
-		if err != nil && !os.IsNotExist(err) {
-			errs = append(errs, fmt.Errorf("runtime file cleanup failed for %s: %w", name, err))
-		}
+	if ownedCache != nil && len(errs) > 0 {
+		return Error{Causes: errs}
+	}
+	coord := gatewaycoord.New(runtimeDir)
+	var err error
+	if ownedCache == nil {
+		err = coord.Remove()
+	} else {
+		err = coord.RemoveOwned(*ownedCache)
+	}
+	if err != nil {
+		errs = append(errs, fmt.Errorf("gateway state cache cleanup failed: %w", err))
 	}
 	if len(errs) > 0 {
 		return Error{Causes: errs}
