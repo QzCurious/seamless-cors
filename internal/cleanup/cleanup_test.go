@@ -29,7 +29,7 @@ func (f *fakeAdapter) ClearOwnedPAC() error {
 
 func TestInspectReportsOwnershipMarkersWithoutMutating(t *testing.T) {
 	runtimeDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(runtimeDir, "control-state.json"), []byte("{}"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runtimeDir, gatewaycoord.StateFileName), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	adapter := &fakeAdapter{
@@ -53,7 +53,7 @@ func TestInspectReportsOwnershipMarkersWithoutMutating(t *testing.T) {
 
 func TestCleanRemovesGatewayStateCacheAndOwnedPAC(t *testing.T) {
 	runtimeDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(runtimeDir, "control-state.json"), []byte("owned"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runtimeDir, gatewaycoord.StateFileName), []byte("owned"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	adapter := &fakeAdapter{}
@@ -65,8 +65,8 @@ func TestCleanRemovesGatewayStateCacheAndOwnedPAC(t *testing.T) {
 	if adapter.cleared != 1 {
 		t.Fatalf("cleanup calls: PAC=%d", adapter.cleared)
 	}
-	if _, err := os.Stat(filepath.Join(runtimeDir, "control-state.json")); !os.IsNotExist(err) {
-		t.Fatalf("control-state.json still exists: %v", err)
+	if _, err := os.Stat(filepath.Join(runtimeDir, gatewaycoord.StateFileName)); !os.IsNotExist(err) {
+		t.Fatalf("%s still exists: %v", gatewaycoord.StateFileName, err)
 	}
 }
 

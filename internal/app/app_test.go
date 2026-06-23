@@ -154,7 +154,7 @@ func TestUninstallRefusesWhileManagedGatewayIsRunning(t *testing.T) {
 	go func() {
 		done <- managedgateway.StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake)
 	}()
-	waitForFile(t, filepath.Join(configDir, "runtime", "control-state.json"))
+	waitForFile(t, filepath.Join(configDir, "runtime", "gateway-state-cache.json"))
 
 	var out bytes.Buffer
 	err := Uninstall(&out, &bytes.Buffer{})
@@ -182,13 +182,13 @@ func TestUninstallAllowsRouterOnlyGatewayOwner(t *testing.T) {
 	go func() {
 		done <- managedgateway.ServeWithContext(ctx, io.Discard, fake)
 	}()
-	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "control-state.json"))
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
 
 	var out bytes.Buffer
 	if err := Uninstall(&out, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Installed User CA uninstalled.") {
+	if !strings.Contains(out.String(), "Installed User CA is already absent.") {
 		t.Fatalf("uninstall output = %q", out.String())
 	}
 

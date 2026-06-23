@@ -3,15 +3,15 @@ package gatewaycoord
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
 	"seamless-cors/internal/config"
-	"seamless-cors/internal/control"
 )
 
-const StateFileName = "control-state.json"
+const StateFileName = "gateway-state-cache.json"
 
 type StateStatus string
 
@@ -31,6 +31,8 @@ type Verification struct {
 	Cache  GatewayStateCache
 }
 
+type OwnerVerifier func(GatewayStateCache) bool
+
 func Default() (*Coordinator, error) {
 	runtimeDir, err := config.RuntimeDir()
 	if err != nil {
@@ -40,14 +42,23 @@ func Default() (*Coordinator, error) {
 }
 
 type Coordinator struct {
-	runtimeDir string
-	statePath  string
+	runtimeDir    string
+	statePath     string
+	ownerVerifier OwnerVerifier
 }
 
 func New(runtimeDir string) *Coordinator {
+	return NewWithVerifier(runtimeDir, VerifyHTTPRouter)
+}
+
+func NewWithVerifier(runtimeDir string, ownerVerifier OwnerVerifier) *Coordinator {
+	if ownerVerifier == nil {
+		ownerVerifier = VerifyHTTPRouter
+	}
 	return &Coordinator{
-		runtimeDir: runtimeDir,
-		statePath:  filepath.Join(runtimeDir, StateFileName),
+		runtimeDir:    runtimeDir,
+		statePath:     filepath.Join(runtimeDir, StateFileName),
+		ownerVerifier: ownerVerifier,
 	}
 }
 
@@ -67,7 +78,7 @@ func (c *Coordinator) Verify() Verification {
 		}
 		return Verification{Status: Stale}
 	}
-	if isActive(cache) {
+	if c.ownerVerifier(cache) {
 		return Verification{Status: Active, Cache: cache}
 	}
 	return Verification{Status: Stale, Cache: cache}
@@ -138,17 +149,6 @@ func (c *Coordinator) read() (GatewayStateCache, error) {
 	if err := json.Unmarshal(data, &cache); err != nil {
 		return GatewayStateCache{}, err
 	}
-	if cache.HTTPRouterListen == "" && cache.Token == "" {
-		var legacy struct {
-			ControlListen string `json:"controlListen"`
-			Token         string `json:"token"`
-		}
-		if err := json.Unmarshal(data, &legacy); err != nil {
-			return GatewayStateCache{}, err
-		}
-		cache.HTTPRouterListen = legacy.ControlListen
-		cache.Token = legacy.Token
-	}
 	return cache, nil
 }
 
@@ -200,21 +200,30 @@ func writeAtomicReplace(path string, cache GatewayStateCache) error {
 func WaitForStop(cache GatewayStateCache) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if !isActive(cache) {
+		if !VerifyHTTPRouter(cache) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 }
 
-func isActive(cache GatewayStateCache) bool {
+func VerifyHTTPRouter(cache GatewayStateCache) bool {
 	if cache.HTTPRouterListen == "" || cache.Token == "" {
 		return false
 	}
 	deadline := time.Now().Add(500 * time.Millisecond)
+	client := http.Client{Timeout: 500 * time.Millisecond}
 	for {
-		if _, err := control.FetchStatus("http://"+cache.HTTPRouterListen, cache.Token); err == nil {
-			return true
+		req, err := http.NewRequest(http.MethodGet, "http://"+cache.HTTPRouterListen+"/status", nil)
+		if err == nil {
+			req.Header.Set("X-Seamless-CORS-Token", cache.Token)
+			resp, err := client.Do(req)
+			if err == nil {
+				_ = resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					return true
+				}
+			}
 		}
 		if time.Now().After(deadline) {
 			return false

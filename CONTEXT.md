@@ -13,8 +13,12 @@ The surface-agnostic gateway command boundary that owns start, stop, status, che
 _Avoid_: Managed Gateway, lifecycle operation module, command service, app orchestration
 
 **Surface-Neutral Command Result**:
-A Gateway Facade operation result that describes command outcomes and required next actions without terminal text, HTTP status codes, or surface-specific formatting.
-_Avoid_: CLI output, HTTP response model, stringly command result
+A Gateway Facade operation result that describes successful, blocked, retryable, and next-action-required command outcomes without terminal text, HTTP status codes, or surface-specific formatting.
+_Avoid_: CLI output, HTTP response model, stringly command result, terminal error text
+
+**Operation-Specific Result Kind**:
+A closed command result vocabulary scoped to one Gateway Facade operation, so each operation exposes only the outcomes that can actually happen for that command.
+_Avoid_: global result code, shared outcome enum, impossible command state
 
 **Gateway Router**:
 An HTTP command surface that exposes user-facing gateway feature routes and renders Gateway Facade results as HTTP responses.
@@ -292,6 +296,10 @@ _Avoid_: opaque default config, verbose manual, runtime listener settings
 A start-time user-facing output behavior shown only after required lifecycle consent and platform approval have succeeded, pointing to the editable Explicit Configuration, Domain List, and managed PAC state instead of runtime listener endpoints.
 _Avoid_: pre-approval running message, listener-first start output, proxy setup instructions, PAC listener summary, control listener summary
 
+**Start Guidance Detail**:
+A surface-neutral successful start result detail containing the user-relevant configuration and lifecycle state needed to render Start Guidance without exposing runtime listener endpoints.
+_Avoid_: terminal start text, listener status detail, proxy setup instructions
+
 **Start Plan**:
 A pre-activation start result that reports whether startup can proceed and whether Explicit Lifecycle Consent is required without changing OS-managed state or runtime visibility.
 _Avoid_: dry run, prompt callback, interactive start state machine
@@ -308,6 +316,10 @@ _Avoid_: plan-as-authorization, plan token, mutation-before-recheck
 A start behavior where a Gateway Owner allows independent read-only Start Plans but accepts only one start mutation at a time, returning already-running or start-already-mutating results from execution based on current state.
 _Avoid_: queued mutation, duplicate mutation, competing activation, plan reservation
 
+**Platform-Approval-Denied Start**:
+A start execution outcome where required platform-owned trust approval is denied after gateway lifecycle consent, so Gateway Runtime and managed PAC state are not activated.
+_Avoid_: consent-required start, infrastructure error, partial trusted start
+
 **Pending Lifecycle Change**:
 A restart-applied Explicit Configuration change detected while the gateway is running and reported to the user without being applied automatically.
 _Avoid_: surprise permission prompt, implicit restart
@@ -317,11 +329,15 @@ A lifecycle behavior where Pending Lifecycle Changes take effect only after the 
 _Avoid_: apply-lifecycle command, hot lifecycle swap
 
 **Explicit Lifecycle Consent**:
-A start-time user agreement collected before a Lifecycle Operation changes current-user OS-managed state, combining all needed PAC and CA consent for the current run into one prompt.
-_Avoid_: implicit consent, persistent consent, surprise permission prompt, partial lifecycle consent
+A start-time user agreement collected before the gateway intentionally changes current-user OS-managed state, limited to gateway-owned lifecycle consent and not a substitute for platform-owned trust approval.
+_Avoid_: implicit consent, persistent consent, surprise permission prompt, partial lifecycle consent, platform approval
+
+**Lifecycle Consent Detail**:
+A surface-neutral description of the gateway-owned lifecycle changes that currently require Explicit Lifecycle Consent, shared by start planning and start execution when consent is required.
+_Avoid_: plan-only consent payload, execute-only consent payload, prompt text, OS trust approval payload, plan token
 
 **Managed PAC Consent**:
-An Explicit Lifecycle Consent required when a gateway start would replace existing managed PAC state, showing current managed PAC state and explaining that Gateway Footprint Cleanup removes seamless-cors-owned managed PAC settings without restoring previous PAC state.
+An Explicit Lifecycle Consent required when gateway start would overwrite a non-owned configured PAC URL in a managed OS service, showing current managed PAC state and explaining that Gateway Footprint Cleanup removes seamless-cors-owned managed PAC settings without restoring previous PAC state.
 _Avoid_: silent proxy replacement, proxy chaining, broad proxy takeover
 
 **Independent PAC Lifecycle**:
@@ -330,7 +346,7 @@ _Avoid_: domain-gated PAC setup, delayed proxy ownership, route-count-based life
 
 **CA Trust Consent**:
 A platform approval moment required before adding or replacing Installed User CA trust for HTTPS interception, with gateway context shown only when the platform requires approval.
-_Avoid_: implicit CA trust, repeated consent for unchanged trust, app-only trust prompt
+_Avoid_: implicit CA trust, repeated consent for unchanged trust, app-only trust prompt, Lifecycle Consent Detail
 
 **Independent CA Lifecycle**:
 A lifecycle boundary where CA Trust Consent and Installed User CA availability follow `ca-trusted` independently of whether the Domain List currently has active entries.
@@ -349,7 +365,7 @@ The user-facing command model where normal operation is limited to starting, sto
 _Avoid_: command-heavy configuration, flag-driven operation
 
 **CA Lifecycle Commands**:
-Top-level user-facing commands that explicitly install, repair, or remove the Installed User CA outside the normal start/stop gateway loop, with removal requiring that no gateway instance is running.
+Top-level user-facing commands that explicitly install, repair, or remove the Installed User CA outside the normal start/stop gateway loop, with removal requiring that Gateway Runtime is not active.
 _Avoid_: nested CA command tree, hidden CA removal, per-start CA trust, config editing command, active-runtime CA removal, extra command confirmation
 
 **Config-Independent CA Install**:
@@ -363,6 +379,10 @@ _Avoid_: reinstalling usable CA, noisy no-op install, repeated trust approval
 **Config-Independent CA Uninstall**:
 A CA lifecycle command boundary where removing the Installed User CA does not modify Explicit Configuration; future trusted starts may reinstall trust when configuration still requests it.
 _Avoid_: uninstall changing `ca-trusted`, disabling desired HTTPS interception, config-coupled removal
+
+**Idempotent CA Uninstall**:
+A CA lifecycle command behavior where uninstalling reports already-absent seamless-cors-owned CA trust and local CA material as success without changing configuration or requiring repair.
+_Avoid_: missing-CA uninstall failure, forced repair before removal, noisy no-op uninstall
 
 **Complete CA Uninstall**:
 A CA lifecycle invariant where uninstall reports success only after seamless-cors-owned current-user CA trust and local CA material are both absent.
@@ -395,6 +415,10 @@ _Avoid_: JSON status, scripting API
 **Read-Only Status**:
 A status behavior that reports gateway, cleanup-needed, and Installed User CA state, including stale Gateway State Cache detection, without changing proxy settings, CA trust, local CA material, or runtime files.
 _Avoid_: status-triggered cleanup, mutating status command
+
+**Gateway Status State**:
+A read-only gateway status vocabulary that describes whether the Gateway Owner and Gateway Runtime are absent, stale, router-only, or running without encoding cleanup or Installed User CA health.
+_Avoid_: cleanup status, CA health status, start result, runtime state file truth
 
 **CA Health Status**:
 A read-only status vocabulary for Installed User CA state using stable values such as usable, missing, expired, expiring-soon, invalid, multiple, mismatched-material, unsupported, and unknown.

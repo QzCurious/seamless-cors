@@ -36,8 +36,29 @@ func TestVerifyCollapsesMalformedCacheIntoStale(t *testing.T) {
 }
 
 func TestVerifyReportsStaleWhenRouterIsInactive(t *testing.T) {
-	coord := New(t.TempDir())
+	coord := NewWithVerifier(t.TempDir(), func(GatewayStateCache) bool { return false })
 	if err := coord.Write(GatewayStateCache{HTTPRouterListen: "127.0.0.1:1", Token: "token"}); err != nil {
+		t.Fatal(err)
+	}
+
+	verification := coord.Verify()
+
+	if verification.Status != Stale {
+		t.Fatalf("status = %s, want %s", verification.Status, Stale)
+	}
+}
+
+func TestVerifyDoesNotReadLegacyControlListenSchema(t *testing.T) {
+	coord := NewWithVerifier(t.TempDir(), func(cache GatewayStateCache) bool {
+		if cache.HTTPRouterListen != "" {
+			t.Fatalf("legacy controlListen was read as httpRouterListen: %#v", cache)
+		}
+		return cache.HTTPRouterListen != "" && cache.Token != ""
+	})
+	if err := os.MkdirAll(coord.RuntimeDirPath(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(coord.StateFilePath(), []byte(`{"controlListen":"127.0.0.1:1","token":"token"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -129,7 +150,7 @@ func TestRemoveOwnedDoesNotRemoveAnotherOwnerCache(t *testing.T) {
 }
 
 func TestClaimReplacesStaleCache(t *testing.T) {
-	coord := New(t.TempDir())
+	coord := NewWithVerifier(t.TempDir(), func(GatewayStateCache) bool { return false })
 	stale := GatewayStateCache{HTTPRouterListen: "127.0.0.1:1", Token: "stale-token"}
 	if err := coord.Write(stale); err != nil {
 		t.Fatal(err)
