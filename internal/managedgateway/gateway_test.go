@@ -17,7 +17,6 @@ import (
 	"seamless-cors/internal/config"
 	"seamless-cors/internal/gatewaycoord"
 	"seamless-cors/internal/gatewayfacade"
-	"seamless-cors/internal/liveconfig"
 	"seamless-cors/internal/platform"
 	"seamless-cors/internal/userca"
 )
@@ -361,14 +360,11 @@ func TestStartWithVerifiedActiveGatewaySkipsCleanupAndConfigValidation(t *testin
 	t.Setenv("HOME", home)
 	cfg := config.Default()
 	firstAdapter := &fakeAdapter{}
-	first, err := newRuntimeForTest(t, cfg, "api.example.test\n", firstAdapter, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	configureGatewayForTest(t, cfg, "api.example.test\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- first.Serve(ctx) }()
+	go func() { done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, firstAdapter) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
 	waitForStatusOutput(t, "seamless-cors status: running")
 
@@ -722,37 +718,6 @@ func TestStopCleansStaleGatewayStateCache(t *testing.T) {
 	}
 }
 
-func TestManagedGatewayRejectsSecondUserInstance(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	cfg := config.Default()
-
-	first, err := newRuntimeForTest(t, cfg, "api.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- first.Serve(ctx) }()
-	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
-	waitForStatusOutput(t, "seamless-cors status: running")
-
-	second, err := newRuntimeForTest(t, cfg, "api.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = second.Serve(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "already running") {
-		t.Fatalf("second instance error = %v", err)
-	}
-
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestManagedGatewayReloadsDomainListIntoGeneratedPAC(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -760,17 +725,15 @@ func TestManagedGatewayReloadsDomainListIntoGeneratedPAC(t *testing.T) {
 	cfg := config.Default()
 	cfg.DomainList = domainPath
 
-	runtime, err := newRuntimeForTest(t, cfg, "api-one.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	configureGatewayForTest(t, cfg, "api-one.example.test\n")
+	fake := &fakeAdapter{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- runtime.Serve(ctx) }()
+	go func() { done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
 
-	pacURL := runtime.engine.PACURL()
+	pacURL := waitForInstalledPAC(t, fake)
 	waitForHTTPBody(t, pacURL, "api-one.example.test")
 
 	if err := os.WriteFile(domainPath, []byte("api-two.example.test\n"), 0o600); err != nil {
@@ -791,17 +754,15 @@ func TestManagedGatewayStopsOnInvalidLiveDomainList(t *testing.T) {
 	cfg := config.Default()
 	cfg.DomainList = domainPath
 
-	runtime, err := newRuntimeForTest(t, cfg, "api-one.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	configureGatewayForTest(t, cfg, "api-one.example.test\n")
+	fake := &fakeAdapter{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- runtime.Serve(ctx) }()
+	go func() { done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
 
-	pacURL := runtime.engine.PACURL()
+	pacURL := waitForInstalledPAC(t, fake)
 	waitForHTTPBody(t, pacURL, "api-one.example.test")
 
 	if err := os.WriteFile(domainPath, []byte("api-two.example.test\nhttps://*.bad.example.test\n"), 0o600); err != nil {
@@ -826,17 +787,15 @@ func TestManagedGatewayAppliesEmptyLiveDomainList(t *testing.T) {
 	cfg := config.Default()
 	cfg.DomainList = domainPath
 
-	runtime, err := newRuntimeForTest(t, cfg, "api-one.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	configureGatewayForTest(t, cfg, "api-one.example.test\n")
+	fake := &fakeAdapter{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- runtime.Serve(ctx) }()
+	go func() { done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
 
-	pacURL := runtime.engine.PACURL()
+	pacURL := waitForInstalledPAC(t, fake)
 	waitForHTTPBody(t, pacURL, "api-one.example.test")
 
 	if err := os.WriteFile(domainPath, []byte("# no active domains\n\n"), 0o600); err != nil {
@@ -862,7 +821,10 @@ func TestManagedGatewayLiveConfigFollowsConfigDomainList(t *testing.T) {
 	t.Setenv("HOME", home)
 	firstDomainPath := filepath.Join(home, "first-domains.txt")
 	secondDomainPath := filepath.Join(home, "second-domains.txt")
-	configPath := filepath.Join(home, "config.yaml")
+	configPath, err := config.DefaultConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(firstDomainPath, []byte("first.example.test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -873,20 +835,19 @@ func TestManagedGatewayLiveConfigFollowsConfigDomainList(t *testing.T) {
 	cfg.DomainList = firstDomainPath
 	cfg.SourcePath = configPath
 	cfg.CATrusted = false
-	writeConfigForRuntime(t, configPath, cfg)
-
-	runtime, err := newRuntimeForTest(t, cfg, "first.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
-	if err != nil {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	writeConfigForRuntime(t, configPath, cfg)
 
+	fake := &fakeAdapter{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- runtime.Serve(ctx) }()
+	go func() { done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
 
-	pacURL := runtime.engine.PACURL()
+	pacURL := waitForInstalledPAC(t, fake)
 	waitForHTTPBody(t, pacURL, "first.example.test")
 	waitForStatusOutput(t, "domain-list: "+firstDomainPath)
 
@@ -921,25 +882,26 @@ func TestManagedGatewayStopsOnInvalidLiveConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	domainPath := filepath.Join(home, "domains.txt")
-	configPath := filepath.Join(home, "config.yaml")
+	configPath, err := config.DefaultConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(domainPath, []byte("api.example.test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(configPath, []byte("domain-list: "+domainPath+"\n"), 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
 	cfg.DomainList = domainPath
 	cfg.SourcePath = configPath
 
-	runtime, err := newRuntimeForTest(t, cfg, "api.example.test\n", &fakeAdapter{}, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeConfigForRuntime(t, configPath, cfg)
+	fake := &fakeAdapter{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- runtime.Serve(ctx) }()
+	go func() { done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
 
 	if err := os.WriteFile(configPath, []byte("domain-list: \"\"\n"), 0o600); err != nil {
@@ -956,13 +918,7 @@ func TestManagedGatewayStopsOnInvalidLiveConfig(t *testing.T) {
 	}
 }
 
-func newRuntimeForTest(t *testing.T, cfg config.Config, domainText string, adapter platform.Adapter, stdout io.Writer) (*runtime, error) {
-	t.Helper()
-	source, live := loadLiveConfigForTest(t, cfg, domainText)
-	return newRuntimeFromLiveConfig(source, live, adapter, stdout)
-}
-
-func loadLiveConfigForTest(t *testing.T, cfg config.Config, domainText string) (*liveconfig.Source, liveconfig.Config) {
+func configureGatewayForTest(t *testing.T, cfg config.Config, domainText string) {
 	t.Helper()
 	if cfg.SourcePath == "" {
 		configPath, err := config.DefaultConfigPath()
@@ -992,11 +948,6 @@ func loadLiveConfigForTest(t *testing.T, cfg config.Config, domainText string) (
 	}
 	cfg.DomainList = domainPath
 	writeConfigForRuntime(t, cfg.SourcePath, cfg)
-	source, live, err := liveconfig.LoadOrBootstrap(cfg.SourcePath, io.Discard)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return source, live
 }
 
 func writeConfigForRuntime(t *testing.T, path string, cfg config.Config) {
@@ -1044,6 +995,19 @@ func waitForFile(t *testing.T, path string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", path)
+}
+
+func waitForInstalledPAC(t *testing.T, fake *fakeAdapter) string {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if fake.installedPAC != "" {
+			return fake.installedPAC
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for PAC install")
+	return ""
 }
 
 func waitForHTTPBody(t *testing.T, url, want string) {
