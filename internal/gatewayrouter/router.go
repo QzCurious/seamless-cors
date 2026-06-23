@@ -2,15 +2,18 @@ package gatewayrouter
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
-	"strings"
 	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
+	"github.com/go-chi/chi/v5"
 
 	"seamless-cors/internal/gatewayfacade"
 )
+
+const tokenHeader = "X-Seamless-CORS-Token"
 
 type Facade interface {
 	PlanStart() (gatewayfacade.StartPlan, error)
@@ -34,14 +37,10 @@ func New(token string, facade Facade) *Server {
 		facade:     facade,
 		shutdownCh: make(chan struct{}),
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/start/plan", s.handleStartPlan)
-	mux.HandleFunc("/start", s.handleStart)
-	mux.HandleFunc("/stop", s.handleStop)
-	mux.HandleFunc("/status", s.handleStatus)
-	mux.HandleFunc("/install", s.handleInstall)
-	mux.HandleFunc("/uninstall", s.handleUninstall)
-	s.server = &http.Server{Handler: mux}
+	router := chi.NewMux()
+	api := humachi.New(router, gatewayRouterConfig())
+	s.register(api)
+	s.server = &http.Server{Handler: router}
 	return s
 }
 
@@ -57,38 +56,62 @@ func (s *Server) ShutdownRequested() <-chan struct{} {
 	return s.shutdownCh
 }
 
-func (s *Server) handleStartPlan(w http.ResponseWriter, req *http.Request) {
-	if !s.authorized(w, req) || !s.method(w, req, http.MethodGet) {
-		return
-	}
-	result, err := s.facade.PlanStart()
-	writeResult(w, result, err)
+func (s *Server) register(api huma.API) {
+	huma.Register(api, s.commandOperation(api, http.MethodGet, "/start/plan", "planStart", "Plan start"), s.planStart)
+	huma.Register(api, s.commandOperation(api, http.MethodPost, "/start", "start", "Start"), s.start)
+	huma.Register(api, s.commandOperation(api, http.MethodPost, "/stop", "stop", "Stop"), s.stop)
+	huma.Register(api, s.commandOperation(api, http.MethodGet, "/status", "status", "Status"), s.status)
+	huma.Register(api, s.commandOperation(api, http.MethodPost, "/install", "install", "Install UserCA"), s.install)
+	huma.Register(api, s.commandOperation(api, http.MethodPost, "/uninstall", "uninstall", "Uninstall UserCA"), s.uninstall)
 }
 
-func (s *Server) handleStart(w http.ResponseWriter, req *http.Request) {
-	if !s.authorized(w, req) || !s.method(w, req, http.MethodPost) {
-		return
+func (s *Server) commandOperation(api huma.API, method, path, operationID, summary string) huma.Operation {
+	return huma.Operation{
+		Method:      method,
+		Path:        path,
+		OperationID: operationID,
+		Summary:     summary,
+		Tags:        []string{"Gateway Router"},
+		Errors:      []int{http.StatusUnauthorized},
+		Security:    []map[string][]string{{"gatewayOwnerToken": []string{}}},
+		Middlewares: huma.Middlewares{s.authorize(api)},
 	}
-	var input gatewayfacade.StartRequest
-	if req.Body != nil && req.ContentLength != 0 {
-		decoder := json.NewDecoder(req.Body)
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&input); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+}
+
+func (s *Server) authorize(api huma.API) func(huma.Context, func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		if s.token != "" && ctx.Header(tokenHeader) == s.token {
+			next(ctx)
 			return
 		}
+		_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "unauthorized")
 	}
-	result, err := s.facade.ExecuteStart(context.Background(), input)
-	writeResult(w, result, err)
 }
 
-func (s *Server) handleStop(w http.ResponseWriter, req *http.Request) {
-	if !s.authorized(w, req) || !s.method(w, req, http.MethodPost) {
-		return
+func (s *Server) planStart(_ context.Context, _ *struct{}) (*startPlanOutput, error) {
+	result, err := s.facade.PlanStart()
+	if err != nil {
+		return nil, err
 	}
+	return &startPlanOutput{Body: result}, nil
+}
+
+func (s *Server) start(_ context.Context, input *startInput) (*startOutput, error) {
+	request := gatewayfacade.StartRequest{}
+	if input.Body != nil {
+		request = *input.Body
+	}
+	result, err := s.facade.ExecuteStart(context.Background(), request)
+	if err != nil {
+		return nil, err
+	}
+	return &startOutput{Body: result}, nil
+}
+
+func (s *Server) stop(_ context.Context, _ *struct{}) (*stopOutput, error) {
 	result, err := s.facade.Stop()
-	if !writeResult(w, result, err) {
-		return
+	if err != nil {
+		return nil, err
 	}
 	if result.Kind == gatewayfacade.StopResultStopped {
 		go func() {
@@ -97,47 +120,31 @@ func (s *Server) handleStop(w http.ResponseWriter, req *http.Request) {
 			_ = s.server.Close()
 		}()
 	}
+	return &stopOutput{Body: result}, nil
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, req *http.Request) {
-	if !s.authorized(w, req) || !s.method(w, req, http.MethodGet) {
-		return
-	}
+func (s *Server) status(_ context.Context, _ *struct{}) (*statusOutput, error) {
 	result, err := s.facade.Status(false)
-	writeResult(w, result, err)
+	if err != nil {
+		return nil, err
+	}
+	return &statusOutput{Body: result}, nil
 }
 
-func (s *Server) handleInstall(w http.ResponseWriter, req *http.Request) {
-	if !s.authorized(w, req) || !s.method(w, req, http.MethodPost) {
-		return
-	}
+func (s *Server) install(_ context.Context, _ *struct{}) (*installOutput, error) {
 	result, err := s.facade.Install()
-	writeResult(w, result, err)
+	if err != nil {
+		return nil, err
+	}
+	return &installOutput{Body: result}, nil
 }
 
-func (s *Server) handleUninstall(w http.ResponseWriter, req *http.Request) {
-	if !s.authorized(w, req) || !s.method(w, req, http.MethodPost) {
-		return
-	}
+func (s *Server) uninstall(_ context.Context, _ *struct{}) (*uninstallOutput, error) {
 	result, err := s.facade.Uninstall()
-	writeResult(w, result, err)
-}
-
-func (s *Server) authorized(w http.ResponseWriter, req *http.Request) bool {
-	if s.token != "" && req.Header.Get("X-Seamless-CORS-Token") == s.token {
-		return true
+	if err != nil {
+		return nil, err
 	}
-	w.WriteHeader(http.StatusUnauthorized)
-	return false
-}
-
-func (s *Server) method(w http.ResponseWriter, req *http.Request, method string) bool {
-	if req.Method == method {
-		return true
-	}
-	w.Header().Set("Allow", method)
-	http.Error(w, fmt.Sprintf("%s requires %s", req.URL.Path, method), http.StatusMethodNotAllowed)
-	return false
+	return &uninstallOutput{Body: result}, nil
 }
 
 func (s *Server) requestShutdown() {
@@ -148,14 +155,44 @@ func (s *Server) requestShutdown() {
 	}
 }
 
-func writeResult(w http.ResponseWriter, result any, err error) bool {
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return false
+func gatewayRouterConfig() huma.Config {
+	config := huma.DefaultConfig("seamless-cors Gateway Router", "0.0.0")
+	config.CreateHooks = nil
+	config.Components.SecuritySchemes = map[string]*huma.SecurityScheme{
+		"gatewayOwnerToken": {
+			Type:        "apiKey",
+			Name:        tokenHeader,
+			In:          "header",
+			Description: "Gateway Owner token from the local Gateway State Cache.",
+		},
 	}
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(result); err != nil && !strings.Contains(err.Error(), "broken pipe") {
-		return false
-	}
-	return true
+	return config
+}
+
+type startInput struct {
+	Body *gatewayfacade.StartRequest
+}
+
+type startPlanOutput struct {
+	Body gatewayfacade.StartPlan
+}
+
+type startOutput struct {
+	Body gatewayfacade.StartResult
+}
+
+type stopOutput struct {
+	Body gatewayfacade.StopResult
+}
+
+type statusOutput struct {
+	Body gatewayfacade.StatusResult
+}
+
+type installOutput struct {
+	Body gatewayfacade.InstallResult
+}
+
+type uninstallOutput struct {
+	Body gatewayfacade.UninstallResult
 }

@@ -3,7 +3,9 @@ module seamless-cors
 go 1.23.0
 
 require (
+	github.com/danielgtaylor/huma/v2 v2.35.0
 	github.com/elazarl/goproxy v1.8.4
+	github.com/go-chi/chi/v5 v5.3.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
