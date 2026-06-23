@@ -472,6 +472,10 @@ _Avoid_: default-port-only shorthand, scheme-specific shorthand
 A Domain List behavior where each line is validated independently so invalid entries can be reported precisely; any invalid line makes the Domain List invalid for startup and live updates.
 _Avoid_: silent invalid entry, partial valid routing, invalid-as-empty
 
+**Domain List Deduplication**:
+A Domain List behavior where equivalent normalized Domain List Entries are treated as one active entry, keeping the first occurrence and ignoring later duplicates.
+_Avoid_: duplicate active routes, line-count domains, generated duplicate PAC rules
+
 **Exact Domain Match**:
 A Domain List matching rule where hostname shorthand matches only the named host unless the entry uses an explicit wildcard.
 _Avoid_: implicit subdomain match, broad domain match

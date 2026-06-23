@@ -804,6 +804,33 @@ func TestManagedGatewayReloadsDomainListIntoGeneratedPAC(t *testing.T) {
 	}
 }
 
+func TestManagedGatewayDoesNotRefreshPACForEquivalentDomainList(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	domainPath := filepath.Join(home, "domains.txt")
+	cfg := config.Default()
+	cfg.DomainList = domainPath
+
+	configureGatewayForTest(t, cfg, "api.example.test\n")
+	fake := &fakeAdapter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake) }()
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
+	waitForInstalledPAC(t, fake)
+
+	if err := os.WriteFile(domainPath, []byte("# same route\nAPI.EXAMPLE.TEST\napi.example.test # duplicate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertNoPACRefresh(t, fake)
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManagedGatewayStopsWhenManagedPACLeaseIsLostAndPreservesUserPAC(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1178,6 +1205,17 @@ func waitForRefreshedPAC(t *testing.T, fake *fakeAdapter) string {
 	}
 	t.Fatal("timed out waiting for PAC refresh")
 	return ""
+}
+
+func assertNoPACRefresh(t *testing.T, fake *fakeAdapter) {
+	t.Helper()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if len(fake.refreshedPAC) > 0 {
+			t.Fatalf("unexpected PAC refresh: %v", fake.refreshedPAC)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func waitForHTTPBody(t *testing.T, url, want string) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -66,7 +67,7 @@ func (h *DynamicHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 }
 
 func Generate(opts Options) string {
-	buckets := deriveRouteBuckets(NewPolicy(opts.Entries), opts.CATrusted)
+	buckets := canonicalRouteBuckets(deriveRouteBuckets(NewPolicy(opts.Entries), opts.CATrusted))
 	return fmt.Sprintf(
 		pacTemplate,
 		pacJSONLiteral("PROXY "+opts.ProxyListen),
@@ -74,6 +75,19 @@ func Generate(opts Options) string {
 		pacJSONLiteral(buckets.wildcardParents),
 		pacJSONLiteral(buckets.origins),
 	)
+}
+
+func RouteSetFingerprint(entries []domain.Entry, caTrusted bool) string {
+	buckets := canonicalRouteBuckets(deriveRouteBuckets(NewPolicy(entries), caTrusted))
+	data, err := json.Marshal(routeSetFingerprint{
+		ExactHosts:      buckets.exactHosts,
+		WildcardParents: buckets.wildcardParents,
+		Origins:         buckets.origins,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
 }
 
 const pacTemplate = `var proxy = %s;
@@ -144,6 +158,12 @@ type originRoute struct {
 	Port   string `json:"port"`
 }
 
+type routeSetFingerprint struct {
+	ExactHosts      []hostRoute   `json:"exactHosts"`
+	WildcardParents []hostRoute   `json:"wildcardParents"`
+	Origins         []originRoute `json:"origins"`
+}
+
 func deriveRouteBuckets(policy Policy, caTrusted bool) routeBuckets {
 	buckets := routeBuckets{
 		exactHosts:      []hostRoute{},
@@ -175,6 +195,58 @@ func deriveRouteBuckets(policy Policy, caTrusted bool) routeBuckets {
 		buckets.exactHosts = append(buckets.exactHosts, route)
 	}
 	return buckets
+}
+
+func canonicalRouteBuckets(buckets routeBuckets) routeBuckets {
+	sort.Slice(buckets.exactHosts, func(i, j int) bool {
+		return hostRouteKey(buckets.exactHosts[i]) < hostRouteKey(buckets.exactHosts[j])
+	})
+	sort.Slice(buckets.wildcardParents, func(i, j int) bool {
+		return hostRouteKey(buckets.wildcardParents[i]) < hostRouteKey(buckets.wildcardParents[j])
+	})
+	sort.Slice(buckets.origins, func(i, j int) bool {
+		return originRouteKey(buckets.origins[i]) < originRouteKey(buckets.origins[j])
+	})
+	buckets.exactHosts = dedupeHostRoutes(buckets.exactHosts)
+	buckets.wildcardParents = dedupeHostRoutes(buckets.wildcardParents)
+	buckets.origins = dedupeOriginRoutes(buckets.origins)
+	return buckets
+}
+
+func dedupeHostRoutes(routes []hostRoute) []hostRoute {
+	out := routes[:0]
+	var last string
+	for idx, route := range routes {
+		key := hostRouteKey(route)
+		if idx > 0 && key == last {
+			continue
+		}
+		out = append(out, route)
+		last = key
+	}
+	return out
+}
+
+func dedupeOriginRoutes(routes []originRoute) []originRoute {
+	out := routes[:0]
+	var last string
+	for idx, route := range routes {
+		key := originRouteKey(route)
+		if idx > 0 && key == last {
+			continue
+		}
+		out = append(out, route)
+		last = key
+	}
+	return out
+}
+
+func hostRouteKey(route hostRoute) string {
+	return fmt.Sprintf("%s|%t|%t", route.Host, route.AllowHTTP, route.AllowHTTPS)
+}
+
+func originRouteKey(route originRoute) string {
+	return route.Scheme + "|" + route.Host + "|" + route.Port
 }
 
 func entryMatches(entry domain.Entry, scheme, host, port string) bool {

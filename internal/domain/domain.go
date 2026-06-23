@@ -38,6 +38,7 @@ func (e LineError) Error() string {
 func ParseList(contents string) ([]Entry, []LineError) {
 	var entries []Entry
 	var errs []LineError
+	seen := map[entryKey]struct{}{}
 
 	for idx, line := range strings.Split(contents, "\n") {
 		lineNo := idx + 1
@@ -50,9 +51,30 @@ func ParseList(contents string) ([]Entry, []LineError) {
 			errs = append(errs, LineError{Line: lineNo, Text: text, Err: err})
 			continue
 		}
+		key := keyForEntry(entry)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 		entries = append(entries, entry)
 	}
 	return entries, errs
+}
+
+type entryKey struct {
+	Scheme   string
+	Host     string
+	Port     string
+	Wildcard bool
+}
+
+func keyForEntry(entry Entry) entryKey {
+	return entryKey{
+		Scheme:   entry.Scheme,
+		Host:     entry.Host,
+		Port:     entry.Port,
+		Wildcard: entry.Wildcard,
+	}
 }
 
 func ParseEntry(text string) (Entry, error) {

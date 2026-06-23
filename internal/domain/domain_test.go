@@ -13,20 +13,17 @@ https://localhost:9443
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errors: %v", errs)
 	}
-	if len(entries) != 4 {
+	if len(entries) != 3 {
 		t.Fatalf("entries = %d", len(entries))
 	}
 	if entries[0].Host != "api.example.test" || entries[0].Scheme != "" || entries[0].Port != "" {
 		t.Fatalf("hostname shorthand entry = %#v", entries[0])
 	}
-	if entries[1].Host != "api.example.test" {
-		t.Fatalf("uppercase hostname should be normalized, got %q", entries[1].Host)
+	if !entries[1].Wildcard || entries[1].Host != "*.qa.example.test" {
+		t.Fatalf("wildcard entry = %#v", entries[1])
 	}
-	if !entries[2].Wildcard || entries[2].Host != "*.qa.example.test" {
-		t.Fatalf("wildcard entry = %#v", entries[2])
-	}
-	if entries[3].Scheme != "https" || entries[3].Host != "localhost" || entries[3].Port != "9443" {
-		t.Fatalf("full origin entry = %#v", entries[3])
+	if entries[2].Scheme != "https" || entries[2].Host != "localhost" || entries[2].Port != "9443" {
+		t.Fatalf("full origin entry = %#v", entries[2])
 	}
 }
 

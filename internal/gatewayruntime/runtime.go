@@ -28,6 +28,7 @@ type Runtime struct {
 	liveConfig *liveconfig.Source
 	pacVersion uint64
 	pacUpdates chan string
+	routeSet   string
 }
 
 type serverError struct {
@@ -64,6 +65,7 @@ func New(source *liveconfig.Source, live liveconfig.Config) (*Runtime, error) {
 		listeners:  []net.Listener{proxyListener, pacListener},
 		pacVersion: 1,
 		pacUpdates: make(chan string, 1),
+		routeSet:   pacrouting.RouteSetFingerprint(entries, live.CATrusted()),
 	}, nil
 }
 
@@ -156,8 +158,14 @@ func (r *Runtime) watchLiveConfig(ctx context.Context, errs chan<- serverError) 
 }
 
 func (r *Runtime) applyLiveConfig(live liveconfig.Config) {
+	nextRouteSet := pacrouting.RouteSetFingerprint(live.Entries(), live.CATrusted())
 	r.mu.Lock()
 	r.live = live
+	if nextRouteSet == r.routeSet {
+		r.mu.Unlock()
+		return
+	}
+	r.routeSet = nextRouteSet
 	r.pacVersion++
 	nextURL := r.pacURL(r.pacVersion)
 	r.mu.Unlock()

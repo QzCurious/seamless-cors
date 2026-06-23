@@ -89,6 +89,27 @@ func TestGenerateUsesExactPortsForFullOrigins(t *testing.T) {
 	}
 }
 
+func TestRouteSetFingerprintIgnoresOrderAndDuplicates(t *testing.T) {
+	first := mustParseEntries(t,
+		"api.example.test",
+		"http://one.example.test:8080",
+		"*.qa.example.test",
+		"api.example.test",
+	)
+	second := mustParseEntries(t,
+		"*.qa.example.test",
+		"api.example.test",
+		"http://one.example.test:8080",
+	)
+
+	if RouteSetFingerprint(first, true) != RouteSetFingerprint(second, true) {
+		t.Fatal("route set fingerprint should ignore order and duplicates")
+	}
+	if RouteSetFingerprint(first, true) == RouteSetFingerprint(first, false) {
+		t.Fatal("route set fingerprint should include trust-aware HTTPS routing")
+	}
+}
+
 func mustParseEntries(t *testing.T, texts ...string) []domain.Entry {
 	t.Helper()
 	entries := make([]domain.Entry, 0, len(texts))
