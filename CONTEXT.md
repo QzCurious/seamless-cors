@@ -80,6 +80,10 @@ _Avoid_: hand-built JavaScript rules, duplicated Domain List parsing, PAC-owned 
 A local HTTP endpoint served by the gateway that returns the current Generated PAC.
 _Avoid_: file PAC, static PAC file
 
+**PAC URL Version**:
+A runtime-selected identity on the PAC Endpoint that changes when PAC Routing clients must fetch a newer Generated PAC while still preserving the seamless-cors Managed PAC Ownership Marker.
+_Avoid_: port rotation, cache parameter, PAC file version, browser cache workaround
+
 **Gateway Distribution**:
 The installable form of seamless-cors for a specific operating system and CPU architecture.
 _Avoid_: cross-platform binary
@@ -189,8 +193,8 @@ A lifecycle default where generated configuration starts with `ca-trusted: true`
 _Avoid_: silent trust installation, disabled-by-default HTTPS interception, config-only trust
 
 **Live Configuration**:
-A gateway behavior where hot-applicable user request settings use the newest valid Explicit Configuration and Domain List without requiring the user to manually restart or reload the program.
-_Avoid_: manual reload, restart requirement, stale configuration
+A gateway behavior where hot-applicable user request settings use the newest valid Explicit Configuration and Domain List in supported browser traffic without requiring the user to manually restart or reload the browser or gateway.
+_Avoid_: runtime-only reload, manual reload, restart requirement, stale configuration
 
 **All-Or-Nothing Config**:
 A configuration behavior where a valid config file is applied as a whole and an invalid config file is rejected without partially changing gateway behavior.
@@ -271,6 +275,10 @@ _Avoid_: footprint-based cleanup, previous-state restoration, guessed ownership
 **Managed PAC Ownership Marker**:
 The stable loopback HTTP PAC URL shape whose path ends in `seamless-cors.pac`, proving a current managed PAC setting belongs to seamless-cors without depending on a run-specific port.
 _Avoid_: managed PAC footprint, run-specific PAC identity, port-based ownership, full-URL ownership, non-loopback PAC ownership
+
+**Managed PAC Lease**:
+A running Gateway Owner's ownership rule that treats the installed seamless-cors Managed PAC URL as live state and shuts down if supported platform inspection shows that managed PAC state was disabled, removed, or replaced outside the gateway.
+_Avoid_: forced PAC restoration, foreign PAC cleanup, silent proxy escape, best-effort PAC ownership
 
 **CA Ownership Marker**:
 The strict seamless-cors-owned current-user CA trust identity used to identify Installed User CA trust for CA lifecycle management.
@@ -580,7 +588,7 @@ QA engineer: "No, Generated PAC is derived from Explicit Configuration and the D
 
 Developer: "How do Domain List changes reach the operating system proxy?"
 
-QA engineer: "The PAC Endpoint serves the current Generated PAC, so routing updates without reinstalling proxy settings."
+QA engineer: "The PAC Endpoint serves the current Generated PAC, and the gateway refreshes the owned PAC URL Version when supported PAC clients need a new URL to observe the update."
 
 Developer: "Can I avoid changing my system proxy settings?"
 

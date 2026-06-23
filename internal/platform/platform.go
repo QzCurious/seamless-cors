@@ -46,9 +46,11 @@ type PACServiceState struct {
 
 type Adapter interface {
 	Capabilities() CapabilityReport
-	InstallPAC(url string) error
+	InstallPAC(url string) ([]string, error)
+	RefreshPAC(url string, services []string) error
 	CurrentPACState() ([]PACServiceState, error)
 	ClearOwnedPAC() error
+	ClearPACForServices(url string, services []string) error
 	TrustedCAs() ([]CARecord, error)
 	TrustCA(certPEM []byte) error
 	RemoveCAs(fingerprints []string) error
@@ -65,11 +67,15 @@ func (NoopAdapter) Capabilities() CapabilityReport {
 		RuntimeCleanup:    CapabilityLimited,
 	}
 }
-func (NoopAdapter) InstallPAC(string) error {
+func (NoopAdapter) InstallPAC(string) ([]string, error) {
+	return nil, fmt.Errorf("managed PAC routing is unsupported on this platform")
+}
+func (NoopAdapter) RefreshPAC(string, []string) error {
 	return fmt.Errorf("managed PAC routing is unsupported on this platform")
 }
 func (NoopAdapter) CurrentPACState() ([]PACServiceState, error) { return nil, nil }
 func (NoopAdapter) ClearOwnedPAC() error                        { return nil }
+func (NoopAdapter) ClearPACForServices(string, []string) error  { return nil }
 func (NoopAdapter) TrustedCAs() ([]CARecord, error)             { return nil, nil }
 func (NoopAdapter) TrustCA([]byte) error                        { return nil }
 func (NoopAdapter) RemoveCAs([]string) error                    { return nil }

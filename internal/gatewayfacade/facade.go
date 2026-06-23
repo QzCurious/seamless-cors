@@ -253,10 +253,37 @@ type Facade struct {
 }
 
 type activeRuntime struct {
-	engine *gatewayruntime.Runtime
-	live   liveconfig.Config
-	cancel context.CancelFunc
-	done   chan error
+	engine             *gatewayruntime.Runtime
+	live               liveconfig.Config
+	cancel             context.CancelFunc
+	done               chan error
+	mu                 sync.RWMutex
+	managedPACURL      string
+	attemptedPACURL    string
+	managedPACServices []string
+}
+
+func (r *activeRuntime) managedPACScope() cleanup.ManagedPACScope {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return cleanup.ManagedPACScope{
+		URL:      r.managedPACURL,
+		URLs:     []string{r.attemptedPACURL},
+		Services: append([]string(nil), r.managedPACServices...),
+	}
+}
+
+func (r *activeRuntime) beginManagedPACRefresh(url string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.attemptedPACURL = url
+}
+
+func (r *activeRuntime) setManagedPACURL(url string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.managedPACURL = url
+	r.attemptedPACURL = ""
 }
 
 func New(adapter platform.Adapter, coord *gatewaycoord.Coordinator, routerListen string) (*Facade, error) {
@@ -378,23 +405,28 @@ func (f *Facade) ExecuteStart(ctx context.Context, request StartRequest) (StartR
 		return StartResult{}, err
 	}
 
-	if err := f.adapter.InstallPAC(engine.PACURL()); err != nil {
+	pacURL := engine.PACURL()
+	managedServices, err := f.adapter.InstallPAC(pacURL)
+	if err != nil {
 		return StartResult{}, err
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	active := &activeRuntime{engine: engine, live: live, cancel: cancel, done: done}
+	active := &activeRuntime{
+		engine:             engine,
+		live:               live,
+		cancel:             cancel,
+		done:               done,
+		managedPACURL:      pacURL,
+		managedPACServices: append([]string(nil), managedServices...),
+	}
 	f.mu.Lock()
 	f.runtime = active
 	f.mu.Unlock()
 	cleanupEngine = false
+	go f.watchManagedPACLease(runCtx, active)
 	go func() {
 		err := engine.Serve(runCtx)
-		f.mu.Lock()
-		if f.runtime == active {
-			f.runtime = nil
-		}
-		f.mu.Unlock()
 		done <- err
 		if err != nil {
 			select {
@@ -431,7 +463,11 @@ func (f *Facade) Stop() (StopResult, error) {
 	}
 	var cleanupErr error
 	if ownerCache.HTTPRouterListen != "" && ownerCache.Token != "" {
-		cleanupErr = cleanup.CleanOwned(f.runtimeDir, f.adapter, ownerCache)
+		if active != nil {
+			cleanupErr = cleanup.CleanOwnedScoped(f.runtimeDir, f.adapter, ownerCache, active.managedPACScope())
+		} else {
+			cleanupErr = cleanup.CleanOwned(f.runtimeDir, f.adapter, ownerCache)
+		}
 	} else {
 		cleanupErr = cleanup.Clean(f.runtimeDir, f.adapter)
 	}
@@ -532,6 +568,74 @@ func (f *Facade) Check() CheckResult {
 		CATrustManagement: report.CATrustManagement,
 		RuntimeCleanup:    report.RuntimeCleanup,
 	}
+}
+
+func (f *Facade) watchManagedPACLease(ctx context.Context, active *activeRuntime) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case nextURL := <-active.engine.PACURLUpdates():
+			scope := active.managedPACScope()
+			if err := f.requireManagedPACLease(scope); err != nil {
+				f.reportFatalRuntimeError(active, err)
+				return
+			}
+			active.beginManagedPACRefresh(nextURL)
+			if err := f.adapter.RefreshPAC(nextURL, scope.Services); err != nil {
+				f.reportFatalRuntimeError(active, fmt.Errorf("managed PAC refresh failed: %w", err))
+				return
+			}
+			active.setManagedPACURL(nextURL)
+		case <-ticker.C:
+			if err := f.requireManagedPACLease(active.managedPACScope()); err != nil {
+				f.reportFatalRuntimeError(active, err)
+				return
+			}
+		}
+	}
+}
+
+func (f *Facade) requireManagedPACLease(scope cleanup.ManagedPACScope) error {
+	states, err := f.adapter.CurrentPACState()
+	if err != nil {
+		return fmt.Errorf("managed PAC lease inspection failed: %w", err)
+	}
+	if !managedPACLeaseHeld(states, scope) {
+		return fmt.Errorf("managed PAC lease lost")
+	}
+	return nil
+}
+
+func (f *Facade) reportFatalRuntimeError(active *activeRuntime, err error) {
+	f.mu.Lock()
+	if f.runtime == active {
+		active.cancel()
+	}
+	f.mu.Unlock()
+	select {
+	case f.fatal <- err:
+	default:
+	}
+}
+
+func managedPACLeaseHeld(states []platform.PACServiceState, scope cleanup.ManagedPACScope) bool {
+	if scope.URL == "" || len(scope.Services) == 0 {
+		return false
+	}
+	byName := map[string]platform.PACServiceState{}
+	for _, state := range states {
+		byName[state.Name] = state
+	}
+	for _, service := range scope.Services {
+		state, ok := byName[service]
+		if !ok || !state.Enabled || state.URL != scope.URL {
+			return false
+		}
+	}
+	return true
 }
 
 func (f *Facade) lifecycleConsentDetail() (*LifecycleConsentDetail, error) {

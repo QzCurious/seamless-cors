@@ -53,11 +53,18 @@ func (a *DarwinAdapter) Capabilities() CapabilityReport {
 	}
 }
 
-func (a *DarwinAdapter) InstallPAC(url string) error {
+func (a *DarwinAdapter) InstallPAC(url string) ([]string, error) {
 	services, err := a.listServices()
 	if err != nil {
-		return err
+		return nil, err
 	}
+	if err := a.RefreshPAC(url, services); err != nil {
+		return nil, err
+	}
+	return services, nil
+}
+
+func (a *DarwinAdapter) RefreshPAC(url string, services []string) error {
 	for _, service := range services {
 		if _, err := a.networksetup("-setautoproxyurl", service, url); err != nil {
 			return err
@@ -93,6 +100,30 @@ func (a *DarwinAdapter) ClearOwnedPAC() error {
 	var firstErr error
 	for _, state := range states {
 		if !state.Enabled || !IsManagedPACFootprint(state.URL) {
+			continue
+		}
+		if _, err := a.networksetup("-setautoproxystate", state.Name, "off"); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (a *DarwinAdapter) ClearPACForServices(url string, services []string) error {
+	states, err := a.CurrentPACState()
+	if err != nil {
+		return err
+	}
+	serviceSet := map[string]struct{}{}
+	for _, service := range services {
+		serviceSet[service] = struct{}{}
+	}
+	var firstErr error
+	for _, state := range states {
+		if _, ok := serviceSet[state.Name]; !ok {
+			continue
+		}
+		if !state.Enabled || state.URL != url || !IsManagedPACFootprint(state.URL) {
 			continue
 		}
 		if _, err := a.networksetup("-setautoproxystate", state.Name, "off"); err != nil && firstErr == nil {

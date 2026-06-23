@@ -5,6 +5,7 @@ import "testing"
 func TestManagedPACFootprintMatchesOnlyLoopbackHTTPPACFilename(t *testing.T) {
 	tests := map[string]bool{
 		"http://127.0.0.1:8079/seamless-cors.pac":               true,
+		"http://127.0.0.1:8079/seamless-cors.pac?v=2":           true,
 		"http://localhost:8079/nested/seamless-cors.pac":        true,
 		"http://[::1]:8079/seamless-cors.pac":                   true,
 		"http://127.0.0.1:8079/not-seamless-cors.pac":           false,

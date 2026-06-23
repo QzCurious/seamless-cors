@@ -38,14 +38,19 @@ func (f *fakeAdapter) Capabilities() platform.CapabilityReport {
 		RuntimeCleanup:    platform.CapabilitySupported,
 	}
 }
-func (f *fakeAdapter) InstallPAC(url string) error {
+func (f *fakeAdapter) InstallPAC(url string) ([]string, error) {
 	f.installedPAC = url
-	return nil
+	return []string{"Wi-Fi"}, nil
 }
+func (f *fakeAdapter) RefreshPAC(string, []string) error { return nil }
 func (f *fakeAdapter) CurrentPACState() ([]platform.PACServiceState, error) {
 	return f.pacStates, nil
 }
 func (f *fakeAdapter) ClearOwnedPAC() error {
+	f.clearedPAC++
+	return nil
+}
+func (f *fakeAdapter) ClearPACForServices(string, []string) error {
 	f.clearedPAC++
 	return nil
 }

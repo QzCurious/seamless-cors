@@ -22,16 +22,21 @@ import (
 )
 
 type fakeAdapter struct {
-	installedPAC string
-	pacStates    []platform.PACServiceState
-	clearedPAC   int
-	trusted      int
-	cleanedCA    int
-	caRecords    []platform.CARecord
-	trustErr     error
-	clearErr     error
-	trustStarted chan struct{}
-	releaseTrust chan struct{}
+	installedPAC          string
+	pacStates             []platform.PACServiceState
+	clearedPAC            int
+	trusted               int
+	cleanedCA             int
+	caRecords             []platform.CARecord
+	trustErr              error
+	clearErr              error
+	refreshErr            error
+	refreshFailAfter      int
+	refreshedPAC          []string
+	clearedPACForServices []string
+	scopedPACClears       int
+	trustStarted          chan struct{}
+	releaseTrust          chan struct{}
 }
 
 func (f *fakeAdapter) Capabilities() platform.CapabilityReport {
@@ -43,15 +48,60 @@ func (f *fakeAdapter) Capabilities() platform.CapabilityReport {
 		RuntimeCleanup:    platform.CapabilitySupported,
 	}
 }
-func (f *fakeAdapter) InstallPAC(url string) error {
+func (f *fakeAdapter) InstallPAC(url string) ([]string, error) {
 	f.installedPAC = url
-	return nil
+	if len(f.pacStates) == 0 {
+		f.pacStates = []platform.PACServiceState{{Name: "Wi-Fi"}}
+	}
+	services := make([]string, 0, len(f.pacStates))
+	for idx := range f.pacStates {
+		services = append(services, f.pacStates[idx].Name)
+		f.pacStates[idx].URL = url
+		f.pacStates[idx].Enabled = true
+	}
+	return services, nil
+}
+func (f *fakeAdapter) RefreshPAC(url string, services []string) error {
+	f.refreshedPAC = append(f.refreshedPAC, url)
+	serviceSet := map[string]struct{}{}
+	for _, service := range services {
+		serviceSet[service] = struct{}{}
+	}
+	mutated := 0
+	for idx := range f.pacStates {
+		if _, ok := serviceSet[f.pacStates[idx].Name]; ok {
+			f.pacStates[idx].URL = url
+			f.pacStates[idx].Enabled = true
+			mutated++
+			if f.refreshErr != nil && f.refreshFailAfter > 0 && mutated >= f.refreshFailAfter {
+				return f.refreshErr
+			}
+		}
+	}
+	return f.refreshErr
 }
 func (f *fakeAdapter) CurrentPACState() ([]platform.PACServiceState, error) {
 	return f.pacStates, nil
 }
 func (f *fakeAdapter) ClearOwnedPAC() error {
 	f.clearedPAC++
+	return f.clearErr
+}
+func (f *fakeAdapter) ClearPACForServices(url string, services []string) error {
+	f.clearedPACForServices = append([]string(nil), services...)
+	serviceSet := map[string]struct{}{}
+	for _, service := range services {
+		serviceSet[service] = struct{}{}
+	}
+	for idx := range f.pacStates {
+		if _, ok := serviceSet[f.pacStates[idx].Name]; ok && f.pacStates[idx].URL == url && f.pacStates[idx].Enabled {
+			f.scopedPACClears++
+			f.pacStates[idx].Enabled = false
+		}
+	}
+	if f.clearErr != nil {
+		f.clearedPAC++
+	}
 	return f.clearErr
 }
 func (f *fakeAdapter) TrustedCAs() ([]platform.CARecord, error) {
@@ -157,8 +207,8 @@ func TestManagedGatewayUsesAdapterAndCleansUpLifecycleState(t *testing.T) {
 	if fake.trusted != 1 {
 		t.Fatalf("trusted calls = %d", fake.trusted)
 	}
-	if fake.clearedPAC == 0 {
-		t.Fatalf("PAC cleanup calls = %d", fake.clearedPAC)
+	if fake.scopedPACClears == 0 {
+		t.Fatalf("scoped PAC cleanup calls = %d", fake.scopedPACClears)
 	}
 	if !strings.Contains(out.String(), "Installed User CA added to the current user's SSL trust settings.") {
 		t.Fatalf("success output = %q", out.String())
@@ -594,7 +644,7 @@ func TestRuntimeOwnerCleansUpWhenGatewayStateLeaseIsLost(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("runtime owner did not exit after lease loss")
 	}
-	if fake.clearedPAC == 0 {
+	if fake.scopedPACClears == 0 {
 		t.Fatal("runtime owner did not run Gateway Footprint Cleanup after lease loss")
 	}
 }
@@ -740,10 +790,117 @@ func TestManagedGatewayReloadsDomainListIntoGeneratedPAC(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForHTTPBody(t, pacURL, "api-two.example.test")
+	refreshedURL := waitForRefreshedPAC(t, fake)
+	if refreshedURL == fake.installedPAC {
+		t.Fatalf("live reload reinstalled same PAC URL %q", refreshedURL)
+	}
+	if !strings.Contains(fake.installedPAC, "?v=1") || !strings.Contains(refreshedURL, "?v=2") {
+		t.Fatalf("PAC URL versions: initial=%q refreshed=%q", fake.installedPAC, refreshedURL)
+	}
 
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManagedGatewayStopsWhenManagedPACLeaseIsLostAndPreservesUserPAC(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	domainPath := filepath.Join(home, "domains.txt")
+	cfg := config.Default()
+	cfg.DomainList = domainPath
+
+	configureGatewayForTest(t, cfg, "api.example.test\n")
+	fake := &fakeAdapter{
+		pacStates: []platform.PACServiceState{
+			{Name: "Wi-Fi"},
+			{Name: "USB LAN"},
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake) }()
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
+	installedURL := waitForInstalledPAC(t, fake)
+
+	fake.pacStates[0] = platform.PACServiceState{Name: "Wi-Fi", URL: "http://user.example/proxy.pac", Enabled: true}
+	fake.pacStates = append(fake.pacStates, platform.PACServiceState{Name: "New Service", URL: installedURL, Enabled: true})
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "managed PAC lease lost") {
+			t.Fatalf("serve error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime owner did not exit after managed PAC lease loss")
+	}
+
+	if fake.pacStates[0].URL != "http://user.example/proxy.pac" || !fake.pacStates[0].Enabled {
+		t.Fatalf("cleanup touched user PAC state: %#v", fake.pacStates[0])
+	}
+	if !fake.pacStates[2].Enabled {
+		t.Fatalf("cleanup touched untracked new service: %#v", fake.pacStates[2])
+	}
+	if fake.pacStates[1].Enabled {
+		t.Fatalf("cleanup did not clear still-owned managed service: %#v", fake.pacStates[1])
+	}
+	if fake.scopedPACClears != 1 {
+		t.Fatalf("scoped PAC clears = %d, want 1", fake.scopedPACClears)
+	}
+}
+
+func TestManagedGatewayCleansAttemptedPACURLAfterPartialRefreshFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	domainPath := filepath.Join(home, "domains.txt")
+	cfg := config.Default()
+	cfg.DomainList = domainPath
+
+	configureGatewayForTest(t, cfg, "api-one.example.test\n")
+	fake := &fakeAdapter{
+		pacStates: []platform.PACServiceState{
+			{Name: "Wi-Fi"},
+			{Name: "USB LAN"},
+		},
+		refreshErr:       errors.New("refresh denied"),
+		refreshFailAfter: 1,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake) }()
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
+	initialURL := waitForInstalledPAC(t, fake)
+
+	if err := os.WriteFile(domainPath, []byte("api-two.example.test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "managed PAC refresh failed") {
+			t.Fatalf("serve error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime owner did not exit after PAC refresh failure")
+	}
+
+	if len(fake.refreshedPAC) == 0 {
+		t.Fatal("PAC refresh was not attempted")
+	}
+	attemptedURL := fake.refreshedPAC[len(fake.refreshedPAC)-1]
+	if attemptedURL == initialURL {
+		t.Fatalf("refresh attempted same PAC URL %q", attemptedURL)
+	}
+	for _, state := range fake.pacStates[:2] {
+		if state.Enabled {
+			t.Fatalf("cleanup left managed service enabled after partial refresh failure: %#v", state)
+		}
+	}
+	if fake.scopedPACClears != 2 {
+		t.Fatalf("scoped PAC clears = %d, want 2", fake.scopedPACClears)
 	}
 }
 
@@ -1007,6 +1164,19 @@ func waitForInstalledPAC(t *testing.T, fake *fakeAdapter) string {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for PAC install")
+	return ""
+}
+
+func waitForRefreshedPAC(t *testing.T, fake *fakeAdapter) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.refreshedPAC) > 0 {
+			return fake.refreshedPAC[len(fake.refreshedPAC)-1]
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for PAC refresh")
 	return ""
 }
 

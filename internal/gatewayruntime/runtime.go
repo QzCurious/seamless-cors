@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -25,6 +26,8 @@ type Runtime struct {
 	pac        *http.Server
 	listeners  []net.Listener
 	liveConfig *liveconfig.Source
+	pacVersion uint64
+	pacUpdates chan string
 }
 
 type serverError struct {
@@ -59,6 +62,8 @@ func New(source *liveconfig.Source, live liveconfig.Config) (*Runtime, error) {
 		proxy:      &http.Server{},
 		pac:        &http.Server{Handler: pacHandler},
 		listeners:  []net.Listener{proxyListener, pacListener},
+		pacVersion: 1,
+		pacUpdates: make(chan string, 1),
 	}, nil
 }
 
@@ -108,11 +113,18 @@ func (r *Runtime) CloseTraffic() error {
 }
 
 func (r *Runtime) PACURL() string {
-	return "http://" + r.listeners[1].Addr().String() + "/" + platform.PACFootprintFileName
+	r.mu.RLock()
+	version := r.pacVersion
+	r.mu.RUnlock()
+	return r.pacURL(version)
 }
 
 func (r *Runtime) PACListen() string {
 	return r.listeners[1].Addr().String()
+}
+
+func (r *Runtime) PACURLUpdates() <-chan string {
+	return r.pacUpdates
 }
 
 func (r *Runtime) State() State {
@@ -146,12 +158,33 @@ func (r *Runtime) watchLiveConfig(ctx context.Context, errs chan<- serverError) 
 func (r *Runtime) applyLiveConfig(live liveconfig.Config) {
 	r.mu.Lock()
 	r.live = live
+	r.pacVersion++
+	nextURL := r.pacURL(r.pacVersion)
 	r.mu.Unlock()
 	r.pacHandler.Set(pacrouting.Generate(pacrouting.Options{
 		ProxyListen: r.listeners[0].Addr().String(),
 		CATrusted:   live.CATrusted(),
 		Entries:     live.Entries(),
 	}))
+	select {
+	case r.pacUpdates <- nextURL:
+	default:
+		select {
+		case <-r.pacUpdates:
+		default:
+		}
+		r.pacUpdates <- nextURL
+	}
+}
+
+func (r *Runtime) pacURL(version uint64) string {
+	u := url.URL{
+		Scheme:   "http",
+		Host:     r.listeners[1].Addr().String(),
+		Path:     "/" + platform.PACFootprintFileName,
+		RawQuery: fmt.Sprintf("v=%d", version),
+	}
+	return u.String()
 }
 
 type State struct {
