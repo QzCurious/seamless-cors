@@ -6,7 +6,7 @@ seamless-cors is a DEV/QA context for controlled browser-origin testing across c
 
 **seamless-cors**:
 A local DEV/QA network tool that sits between the browser and configured upstream domains so browser requests can be tested under adjusted cross-origin behavior without changing application request URLs.
-_Avoid_: seamless-cors, generic proxy, CORS middleware
+_Avoid_: generic proxy, CORS middleware
 
 **Gateway Facade**:
 The surface-agnostic gateway command boundary that owns start, stop, status, check, and Installed User CA lifecycle commands for CLI and HTTP control surfaces. It coordinates Gateway Coordination, Gateway Footprint Cleanup decisions, Managed PAC state, runtime visibility, and UserCA lifecycle behavior without owning the Gateway Runtime internals.
@@ -33,7 +33,7 @@ The live traffic-serving engine that owns the proxy listener, proxy server, PAC 
 _Avoid_: lifecycle facade, command router, OS proxy manager, cleanup owner
 
 **Router-Only Serve**:
-A command behavior where the command becomes the Gateway Owner and starts the Gateway Router as an HTTP client entry point without automatically starting Gateway Runtime, running Gateway Footprint Cleanup, or changing managed OS state; it fails clearly when a Gateway Owner already exists and may claim stale Gateway State Cache only after verification finds no reachable owner.
+A command behavior where the command becomes the Gateway Owner and starts the Gateway Router as an HTTP client entry point without automatically starting Gateway Runtime, running Gateway Footprint Cleanup at serve startup, or changing managed OS state; it fails clearly when a Gateway Owner already exists and may claim stale Gateway State Cache only after verification finds no reachable owner.
 _Avoid_: implicit gateway start, daemonized start, hidden lifecycle activation, stale-cache cleanup, OS PAC repair
 
 **Router-Hosted Start**:
@@ -373,7 +373,7 @@ A Managed System Proxy behavior where supported platform adapters apply PAC Rout
 _Avoid_: active-service-only PAC, partial network setup
 
 **Minimal Command Surface**:
-The user-facing command model where normal operation is limited to starting, stopping, and checking the gateway while runtime behavior follows Live Configuration.
+The user-facing command model where normal operation is limited to starting, stopping, and viewing gateway status while runtime behavior follows Live Configuration.
 _Avoid_: command-heavy configuration, flag-driven operation
 
 **CA Lifecycle Commands**:
@@ -414,7 +414,7 @@ _Avoid_: bypassing owner command authority, router-only local mutation, active-r
 
 **Gateway Footprint Cleanup**:
 An idempotent lifecycle behavior where `start`, `stop`, and Gateway Owner shutdown remove seamless-cors-owned managed PAC settings and Gateway State Cache state through Gateway Coordination operations, while leaving Installed User CA state untouched.
-_Avoid_: runtime cleanup, status cleanup, serve cleanup, broad cleanup, CA removal, restore-based cleanup
+_Avoid_: runtime cleanup, status cleanup, serve-start cleanup, broad cleanup, CA removal, restore-based cleanup
 
 **No PAC Restoration**:
 A cleanup boundary where Gateway Footprint Cleanup removes seamless-cors-owned managed PAC settings without reconstructing previous machine PAC state.
