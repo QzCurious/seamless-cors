@@ -81,8 +81,8 @@ A local HTTP endpoint served by the gateway that returns the current Generated P
 _Avoid_: file PAC, static PAC file
 
 **PAC URL Version**:
-A runtime-selected identity on the PAC Endpoint that changes when PAC Routing clients must fetch a newer Generated PAC while still preserving the seamless-cors Managed PAC Ownership Marker.
-_Avoid_: port rotation, cache parameter, PAC file version, browser cache workaround
+A runtime-selected identity on the PAC Endpoint, usually carried by an owned URL query version, that changes when PAC Routing clients must fetch a newer Generated PAC while still preserving the seamless-cors Managed PAC Ownership Marker.
+_Avoid_: port rotation, foreign cache-busting parameter, PAC file version, browser cache workaround
 
 **Gateway Distribution**:
 The installable form of seamless-cors for a specific operating system and CPU architecture.
@@ -280,6 +280,10 @@ _Avoid_: managed PAC footprint, run-specific PAC identity, port-based ownership,
 A running Gateway Owner's ownership rule that treats the installed seamless-cors Managed PAC URL as live state and shuts down if supported platform inspection shows that managed PAC state was disabled, removed, or replaced outside the gateway.
 _Avoid_: forced PAC restoration, foreign PAC cleanup, silent proxy escape, best-effort PAC ownership
 
+**Managed PAC Lease Lost**:
+A user-facing fatal runtime condition where the gateway reports `managed-pac-lease-lost` when its managed PAC state was changed outside the gateway, then gives restart or cleanup guidance without restoring foreign PAC state.
+_Avoid_: raw lease error, silent exit, forced PAC restoration, ambiguous runtime failure
+
 **CA Ownership Marker**:
 The strict seamless-cors-owned current-user CA trust identity used to identify Installed User CA trust for CA lifecycle management.
 _Avoid_: CA footprint, name-contains matching, system-wide CA cleanup, user-authored CA identity
@@ -361,8 +365,8 @@ A lifecycle boundary where CA Trust Consent and Installed User CA availability f
 _Avoid_: domain-gated CA trust, implicit CA delay, route-dependent trust setup
 
 **Lifecycle Activation Order**:
-A startup lifecycle boundary where required CA trust approval and CA Ensure finish before managed PAC state and runtime visibility are established, and Start Guidance is shown only after activation has succeeded.
-_Avoid_: pre-validation trust changes, PAC-before-trust startup, degraded trusted mode, pre-approval runtime state, status-visible pending approval, half-started gateway
+A startup lifecycle boundary where required CA trust approval and CA Ensure finish before managed PAC state and Gateway Runtime activation are established, and Start Guidance is shown only after activation has succeeded.
+_Avoid_: pre-validation trust changes, PAC-before-trust startup, degraded trusted mode, pre-approval runtime state, start-success-before-approval, half-started gateway
 
 **All-Service PAC Management**:
 A Managed System Proxy behavior where supported platform adapters apply PAC Routing to every network service they manage, so routing remains consistent when the active network changes during a gateway run.

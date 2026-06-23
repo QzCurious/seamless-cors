@@ -17,6 +17,8 @@ import (
 	"seamless-cors/internal/userca"
 )
 
+var ErrManagedPACLeaseLost = errors.New("managed PAC lease lost")
+
 type StartPlanKind string
 
 const (
@@ -604,7 +606,7 @@ func (f *Facade) requireManagedPACLease(scope cleanup.ManagedPACScope) error {
 		return fmt.Errorf("managed PAC lease inspection failed: %w", err)
 	}
 	if !managedPACLeaseHeld(states, scope) {
-		return fmt.Errorf("managed PAC lease lost")
+		return ErrManagedPACLeaseLost
 	}
 	return nil
 }
