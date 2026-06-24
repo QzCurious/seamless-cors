@@ -4,13 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,7 +19,7 @@ import (
 	"seamless-cors/internal/config"
 	"seamless-cors/internal/gatewaycoord"
 	"seamless-cors/internal/gatewayfacade"
-	"seamless-cors/internal/gatewayrouter"
+	"seamless-cors/internal/gatewayowner"
 	"seamless-cors/internal/platform"
 )
 
@@ -73,13 +70,13 @@ func (g Gateway) Start(ctx context.Context) error {
 	if err := cleanRuntime(adapter); err != nil {
 		return err
 	}
-	owner, err := newOwner(adapter, stdout)
+	owner, err := gatewayowner.New(adapter)
 	if err != nil {
 		return err
 	}
 	started := false
-	return owner.run(ctx, func() error {
-		result, err := owner.planAndStart(ctx, g.Stdin, stdout)
+	return owner.Run(ctx, func() error {
+		result, err := planAndStart(ctx, owner.Facade(), g.Stdin, stdout)
 		if err != nil {
 			return err
 		}
@@ -104,116 +101,18 @@ func (g Gateway) ServeOwner(ctx context.Context) error {
 	if coord.Verify().Status == gatewaycoord.Active {
 		return fmt.Errorf("gateway owner already running")
 	}
-	owner, err := newOwnerWithCoord(adapter, stdout, coord)
+	owner, err := gatewayowner.NewWithCoord(adapter, coord)
 	if err != nil {
 		return err
 	}
-	return owner.run(ctx, func() error {
+	return owner.Run(ctx, func() error {
 		fmt.Fprintln(stdout, "gateway owner running")
 		return nil
 	})
 }
 
-type owner struct {
-	adapter  platform.Adapter
-	stdout   io.Writer
-	coord    *gatewaycoord.Coordinator
-	token    string
-	cache    gatewaycoord.GatewayStateCache
-	listener net.Listener
-	facade   *gatewayfacade.Facade
-	router   *gatewayrouter.Server
-}
-
-func newOwner(adapter platform.Adapter, stdout io.Writer) (*owner, error) {
-	coord, err := gatewaycoord.Default()
-	if err != nil {
-		return nil, err
-	}
-	return newOwnerWithCoord(adapter, stdout, coord)
-}
-
-func newOwnerWithCoord(adapter platform.Adapter, stdout io.Writer, coord *gatewaycoord.Coordinator) (*owner, error) {
-	token, err := randomToken()
-	if err != nil {
-		return nil, err
-	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, fmt.Errorf("router listener unavailable: %w", err)
-	}
-	routerListen := listener.Addr().String()
-	facade, err := gatewayfacade.New(adapter, coord, routerListen)
-	if err != nil {
-		_ = listener.Close()
-		return nil, err
-	}
-	cache := gatewaycoord.GatewayStateCache{HTTPRouterListen: routerListen, Token: token}
-	facade.SetOwnerCache(cache)
-	router := gatewayrouter.New(token, facade)
-	return &owner{
-		adapter:  adapter,
-		stdout:   stdout,
-		coord:    coord,
-		token:    token,
-		cache:    cache,
-		listener: listener,
-		facade:   facade,
-		router:   router,
-	}, nil
-}
-
-func (o *owner) run(ctx context.Context, afterPublish func() error) error {
-	errs := make(chan error, 1)
-	go func() { errs <- o.router.Serve(o.listener) }()
-	if err := o.coord.Claim(o.cache); err != nil {
-		_ = o.router.Close(context.Background())
-		return err
-	}
-	defer o.coord.RemoveOwned(o.cache)
-	leaseLost := watchLease(ctx, o.coord, o.cache)
-	if afterPublish != nil {
-		if err := afterPublish(); err != nil {
-			_ = o.closeOwnerOnly(context.Background())
-			return err
-		}
-	}
-	select {
-	case <-ctx.Done():
-		_, _ = o.facade.Stop()
-		_ = o.router.Close(context.Background())
-		return nil
-	case <-leaseLost:
-		_, _ = o.facade.Stop()
-		_ = o.router.Close(context.Background())
-		return nil
-	case <-o.router.ShutdownRequested():
-		_ = o.router.Close(context.Background())
-		return nil
-	case err := <-o.facade.FatalRuntimeErrors():
-		_, _ = o.facade.Stop()
-		_ = o.router.Close(context.Background())
-		return err
-	case err := <-errs:
-		if err == nil || err == http.ErrServerClosed {
-			return nil
-		}
-		return err
-	}
-}
-
-func (o *owner) shutdown(ctx context.Context) error {
-	_, _ = o.facade.Stop()
-	return o.closeOwnerOnly(ctx)
-}
-
-func (o *owner) closeOwnerOnly(ctx context.Context) error {
-	_ = o.coord.RemoveOwned(o.cache)
-	return o.router.Close(ctx)
-}
-
-func (o *owner) planAndStart(ctx context.Context, stdin io.Reader, stdout io.Writer) (gatewayfacade.StartResult, error) {
-	plan, err := o.facade.PlanStart()
+func planAndStart(ctx context.Context, facade *gatewayfacade.Facade, stdin io.Reader, stdout io.Writer) (gatewayfacade.StartResult, error) {
+	plan, err := facade.PlanStart()
 	if err != nil {
 		return gatewayfacade.StartResult{}, err
 	}
@@ -224,7 +123,7 @@ func (o *owner) planAndStart(ctx context.Context, stdin io.Reader, stdout io.Wri
 		}
 		input.Consent = acceptConsent(plan.Consent)
 	}
-	result, err := o.facade.ExecuteStart(ctx, input)
+	result, err := facade.ExecuteStart(ctx, input)
 	if err != nil {
 		return gatewayfacade.StartResult{}, err
 	}
@@ -450,34 +349,6 @@ func activeOwnerState() (bool, error) {
 		return false, err
 	}
 	return coord.Verify().Status == gatewaycoord.Active, nil
-}
-
-func watchLease(ctx context.Context, coord *gatewaycoord.Coordinator, cache gatewaycoord.GatewayStateCache) <-chan struct{} {
-	lost := make(chan struct{})
-	go func() {
-		defer close(lost)
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if !coord.Owns(cache) {
-					return
-				}
-			}
-		}
-	}()
-	return lost
-}
-
-func randomToken() (string, error) {
-	var bytes [32]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(bytes[:]), nil
 }
 
 func requireSupported(report platform.CapabilityReport) error {
