@@ -47,7 +47,7 @@ func TestDarwinAdapterInstallsPACWithoutRecordingPreviousAutoProxy(t *testing.T)
 	runner := &fakeRunner{}
 	adapter := &DarwinAdapter{runner: runner}
 
-	if _, err := adapter.InstallPAC("http://127.0.0.1:8079/seamless-cors.pac"); err != nil {
+	if _, err := adapter.InstallPAC("http://127.0.0.1:8079/seamless-cors.pac", []string{"Wi-Fi"}); err != nil {
 		t.Fatal(err)
 	}
 

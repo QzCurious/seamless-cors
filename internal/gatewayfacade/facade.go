@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -38,34 +39,21 @@ const (
 )
 
 type StartPlan struct {
-	Kind    StartPlanKind           `json:"kind"`
-	Consent *LifecycleConsentDetail `json:"consent,omitempty"`
+	Kind                  StartPlanKind                `json:"kind"`
+	PACReplacementConsent *PACReplacementConsentDetail `json:"pacReplacementConsent,omitempty"`
 }
 
 type StartRequest struct {
-	Consent *LifecycleConsentInput `json:"consent,omitempty"`
+	PACReplacementConsent *PACReplacementConsentInput `json:"pacReplacementConsent,omitempty"`
 }
 
 type StartResult struct {
-	Kind     StartResultKind         `json:"kind"`
-	Consent  *LifecycleConsentDetail `json:"consent,omitempty"`
-	Guidance *StartGuidanceDetail    `json:"guidance,omitempty"`
+	Kind                  StartResultKind              `json:"kind"`
+	PACReplacementConsent *PACReplacementConsentDetail `json:"pacReplacementConsent,omitempty"`
+	Guidance              *StartGuidanceDetail         `json:"guidance,omitempty"`
 }
 
-type LifecycleConsentDetail struct {
-	Requirements []ConsentRequirement `json:"requirements"`
-}
-
-type ConsentRequirement struct {
-	Kind                  ConsentRequirementKind       `json:"kind"`
-	ManagedPACReplacement *ManagedPACReplacementDetail `json:"managedPacReplacement,omitempty"`
-}
-
-type ConsentRequirementKind string
-
-const ConsentRequirementManagedPACReplacement ConsentRequirementKind = "managed-pac-replacement"
-
-type ManagedPACReplacementDetail struct {
+type PACReplacementConsentDetail struct {
 	CurrentPACState []ManagedPACServiceState `json:"currentPacState"`
 	CleanupMode     CleanupMode              `json:"cleanupMode"`
 }
@@ -89,16 +77,17 @@ const (
 	PACOwnershipForeign PACOwnership = "foreign"
 )
 
-type LifecycleConsentInput struct {
-	AcceptedRequirements []ConsentRequirementKind `json:"acceptedRequirements"`
+type PACReplacementConsentInput struct {
+	Accepted bool `json:"accepted"`
 }
 
 type StartGuidanceDetail struct {
-	ConfigPath         string `json:"configPath"`
-	DomainListPath     string `json:"domainListPath"`
-	ManagedPACActive   bool   `json:"managedPacActive"`
-	CATrusted          bool   `json:"caTrusted"`
-	InstalledCAChanged bool   `json:"installedCaChanged,omitempty"`
+	ConfigPath         string   `json:"configPath"`
+	DomainListPath     string   `json:"domainListPath"`
+	ManagedPACActive   bool     `json:"managedPacActive"`
+	ManagedPACServices []string `json:"managedPacServices,omitempty"`
+	CATrusted          bool     `json:"caTrusted"`
+	InstalledCAChanged bool     `json:"installedCaChanged,omitempty"`
 }
 
 type StopResultKind string
@@ -198,12 +187,13 @@ type OwnerStatusDetail struct {
 }
 
 type RuntimeStatusDetail struct {
-	ProxyListen      string                       `json:"proxyListen"`
-	PACListen        string                       `json:"pacListen"`
-	DomainListPath   string                       `json:"domainListPath"`
-	DomainCount      int                          `json:"domainCount"`
-	CATrusted        bool                         `json:"caTrusted"`
-	PendingLifecycle []PendingLifecycleChangeKind `json:"pendingLifecycle,omitempty"`
+	ProxyListen        string                       `json:"proxyListen"`
+	PACListen          string                       `json:"pacListen"`
+	DomainListPath     string                       `json:"domainListPath"`
+	DomainCount        int                          `json:"domainCount"`
+	CATrusted          bool                         `json:"caTrusted"`
+	ManagedPACServices []string                     `json:"managedPacServices,omitempty"`
+	PendingLifecycle   []PendingLifecycleChangeKind `json:"pendingLifecycle,omitempty"`
 }
 
 type PendingLifecycleChangeKind string
@@ -335,12 +325,12 @@ func (f *Facade) PlanStart() (StartPlan, error) {
 	if running {
 		return StartPlan{Kind: StartPlanAlreadyRunning}, nil
 	}
-	consent, err := f.lifecycleConsentDetail()
+	assessment, err := f.assessPACReplacement()
 	if err != nil {
 		return StartPlan{}, err
 	}
-	if consentRequired(consent) {
-		return StartPlan{Kind: StartPlanConsentRequired, Consent: consent}, nil
+	if assessment.required {
+		return StartPlan{Kind: StartPlanConsentRequired, PACReplacementConsent: assessment.detail}, nil
 	}
 	return StartPlan{Kind: StartPlanReady}, nil
 }
@@ -363,91 +353,7 @@ func (f *Facade) ExecuteStart(ctx context.Context, request StartRequest) (StartR
 		f.mu.Unlock()
 	}()
 
-	consent, err := f.lifecycleConsentDetail()
-	if err != nil {
-		return StartResult{}, err
-	}
-	if !consentAccepted(consent, request.Consent) {
-		return StartResult{Kind: StartResultConsentRequired, Consent: consent}, nil
-	}
-
-	source, live, err := liveconfigLoadOrBootstrap()
-	if err != nil {
-		return StartResult{}, err
-	}
-	engine, err := gatewayruntime.New(source, live)
-	if err != nil {
-		return StartResult{}, err
-	}
-	cleanupEngine := true
-	defer func() {
-		if cleanupEngine {
-			_ = engine.Close()
-		}
-	}()
-
-	installedCAChanged := false
-	if live.CATrusted() {
-		caDir, err := config.CADir()
-		if err != nil {
-			return StartResult{}, err
-		}
-		authority, ensureResult, err := userca.Ensure(caDir, f.adapter)
-		if err != nil {
-			if errors.Is(err, platform.ErrTrustApprovalDenied) {
-				return StartResult{Kind: StartResultPlatformApprovalDenied}, nil
-			}
-			return StartResult{}, err
-		}
-		installedCAChanged = ensureResult.Changed
-		if err := engine.SetAuthority(authority); err != nil {
-			return StartResult{}, err
-		}
-	} else if err := engine.SetAuthority(nil); err != nil {
-		return StartResult{}, err
-	}
-
-	pacURL := engine.PACURL()
-	managedServices, err := f.adapter.InstallPAC(pacURL)
-	if err != nil {
-		return StartResult{}, err
-	}
-	runCtx, cancel := context.WithCancel(ctx)
-	done := make(chan error, 1)
-	active := &activeRuntime{
-		engine:             engine,
-		live:               live,
-		cancel:             cancel,
-		done:               done,
-		managedPACURL:      pacURL,
-		managedPACServices: append([]string(nil), managedServices...),
-	}
-	f.mu.Lock()
-	f.runtime = active
-	f.mu.Unlock()
-	cleanupEngine = false
-	go f.watchManagedPACLease(runCtx, active)
-	go func() {
-		err := engine.Serve(runCtx)
-		done <- err
-		if err != nil {
-			select {
-			case f.fatal <- err:
-			default:
-			}
-		}
-	}()
-
-	return StartResult{
-		Kind: StartResultStarted,
-		Guidance: &StartGuidanceDetail{
-			ConfigPath:         live.ConfigPath(),
-			DomainListPath:     live.DomainListPath(),
-			ManagedPACActive:   true,
-			CATrusted:          live.CATrusted(),
-			InstalledCAChanged: installedCAChanged,
-		},
-	}, nil
+	return gatewayActivation{facade: f}.Start(ctx, request)
 }
 
 func (f *Facade) Stop() (StopResult, error) {
@@ -465,11 +371,7 @@ func (f *Facade) Stop() (StopResult, error) {
 	}
 	var cleanupErr error
 	if ownerCache.HTTPRouterListen != "" && ownerCache.Token != "" {
-		if active != nil {
-			cleanupErr = cleanup.CleanOwnedScoped(f.runtimeDir, f.adapter, ownerCache, active.managedPACScope())
-		} else {
-			cleanupErr = cleanup.CleanOwned(f.runtimeDir, f.adapter, ownerCache)
-		}
+		cleanupErr = cleanup.CleanOwned(f.runtimeDir, f.adapter, ownerCache)
 	} else {
 		cleanupErr = cleanup.Clean(f.runtimeDir, f.adapter)
 	}
@@ -498,12 +400,13 @@ func (f *Facade) Status(stale bool) (StatusResult, error) {
 		result.Kind = GatewayStatusRunning
 		result.Owner = &OwnerStatusDetail{RouterListen: f.routerListen}
 		result.Runtime = &RuntimeStatusDetail{
-			ProxyListen:      state.ProxyListen,
-			PACListen:        state.PACListen,
-			DomainListPath:   state.DomainList,
-			DomainCount:      state.DomainCount,
-			CATrusted:        state.CATrusted,
-			PendingLifecycle: pendingLifecycleKinds(state.PendingLifecycle),
+			ProxyListen:        state.ProxyListen,
+			PACListen:          state.PACListen,
+			DomainListPath:     state.DomainList,
+			DomainCount:        state.DomainCount,
+			CATrusted:          state.CATrusted,
+			ManagedPACServices: sortedStrings(active.managedPACServices),
+			PendingLifecycle:   pendingLifecycleKinds(state.PendingLifecycle),
 		}
 		return result, nil
 	}
@@ -627,43 +530,49 @@ func managedPACLeaseHeld(states []platform.PACServiceState, scope cleanup.Manage
 	if scope.URL == "" || len(scope.Services) == 0 {
 		return false
 	}
-	byName := map[string]platform.PACServiceState{}
+	managed := stringSet(scope.Services)
 	for _, state := range states {
-		byName[state.Name] = state
-	}
-	for _, service := range scope.Services {
-		state, ok := byName[service]
-		if !ok || !state.Enabled || state.URL != scope.URL {
+		if _, ok := managed[state.Name]; !ok {
+			continue
+		}
+		if !state.Enabled || state.URL != scope.URL {
 			return false
 		}
 	}
 	return true
 }
 
-func (f *Facade) lifecycleConsentDetail() (*LifecycleConsentDetail, error) {
+type pacReplacementAssessment struct {
+	detail     *PACReplacementConsentDetail
+	serviceSet []string
+	required   bool
+}
+
+func (f *Facade) assessPACReplacement() (pacReplacementAssessment, error) {
 	states, err := f.adapter.CurrentPACState()
 	if err != nil {
-		return nil, err
+		return pacReplacementAssessment{}, err
 	}
 	managedStates := managedPACServiceStates(states)
+	serviceSet := make([]string, 0, len(managedStates))
 	needsPACConsent := false
 	for _, state := range managedStates {
+		serviceSet = append(serviceSet, state.ServiceName)
 		if state.Ownership == PACOwnershipForeign {
 			needsPACConsent = true
-			break
 		}
 	}
+	sort.Strings(serviceSet)
 	if !needsPACConsent {
-		return nil, nil
+		return pacReplacementAssessment{serviceSet: serviceSet}, nil
 	}
-	return &LifecycleConsentDetail{
-		Requirements: []ConsentRequirement{{
-			Kind: ConsentRequirementManagedPACReplacement,
-			ManagedPACReplacement: &ManagedPACReplacementDetail{
-				CurrentPACState: managedStates,
-				CleanupMode:     CleanupModeNoPACRestoration,
-			},
-		}},
+	return pacReplacementAssessment{
+		detail: &PACReplacementConsentDetail{
+			CurrentPACState: managedStates,
+			CleanupMode:     CleanupModeNoPACRestoration,
+		},
+		serviceSet: serviceSet,
+		required:   true,
 	}, nil
 }
 
@@ -677,6 +586,9 @@ func managedPACServiceStates(states []platform.PACServiceState) []ManagedPACServ
 			Ownership:   pacOwnership(state.URL),
 		})
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ServiceName < out[j].ServiceName
+	})
 	return out
 }
 
@@ -690,27 +602,18 @@ func pacOwnership(raw string) PACOwnership {
 	return PACOwnershipForeign
 }
 
-func consentRequired(consent *LifecycleConsentDetail) bool {
-	return consent != nil && len(consent.Requirements) > 0
+func stringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	return set
 }
 
-func consentAccepted(consent *LifecycleConsentDetail, input *LifecycleConsentInput) bool {
-	if !consentRequired(consent) {
-		return true
-	}
-	if input == nil {
-		return false
-	}
-	accepted := map[ConsentRequirementKind]bool{}
-	for _, kind := range input.AcceptedRequirements {
-		accepted[kind] = true
-	}
-	for _, req := range consent.Requirements {
-		if !accepted[req.Kind] {
-			return false
-		}
-	}
-	return true
+func sortedStrings(values []string) []string {
+	out := append([]string(nil), values...)
+	sort.Strings(out)
+	return out
 }
 
 func cleanupFailures(err error) []CleanupFailureDetail {

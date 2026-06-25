@@ -23,7 +23,7 @@ import (
 	"seamless-cors/internal/platform"
 )
 
-var ErrLifecycleConsentDeclined = errors.New("explicit lifecycle consent declined")
+var ErrPACReplacementConsentDeclined = errors.New("PAC replacement consent declined")
 
 func Start(stdout, _ io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -118,10 +118,10 @@ func planAndStart(ctx context.Context, facade *gatewayfacade.Facade, stdin io.Re
 	}
 	input := gatewayfacade.StartRequest{}
 	if plan.Kind == gatewayfacade.StartPlanConsentRequired {
-		if err := promptForLifecycleConsentDetail(stdin, stdout, plan.Consent); err != nil {
+		if err := promptForPACReplacementConsent(stdin, stdout, plan.PACReplacementConsent); err != nil {
 			return gatewayfacade.StartResult{}, err
 		}
-		input.Consent = acceptConsent(plan.Consent)
+		input.PACReplacementConsent = acceptPACReplacementConsent(plan.PACReplacementConsent)
 	}
 	result, err := facade.ExecuteStart(ctx, input)
 	if err != nil {
@@ -129,7 +129,7 @@ func planAndStart(ctx context.Context, facade *gatewayfacade.Facade, stdin io.Re
 	}
 	renderStartResult(stdout, result)
 	if result.Kind == gatewayfacade.StartResultConsentRequired {
-		return result, ErrLifecycleConsentDeclined
+		return result, ErrPACReplacementConsentDeclined
 	}
 	if result.Kind == gatewayfacade.StartResultPlatformApprovalDenied {
 		return result, platform.ErrTrustApprovalDenied
@@ -361,50 +361,41 @@ func requireSupported(report platform.CapabilityReport) error {
 	return fmt.Errorf("platform unsupported: run `seamless-cors check` for details")
 }
 
-type lifecycleConsentRequest struct {
+type pacReplacementConsentRequest struct {
 	ManagedPAC      bool
 	CurrentPACState []platform.PACServiceState
 }
 
-func (r lifecycleConsentRequest) needed() bool {
+func (r pacReplacementConsentRequest) needed() bool {
 	return r.ManagedPAC
 }
 
-func promptForLifecycleConsent(stdin io.Reader, stdout io.Writer, req lifecycleConsentRequest) error {
+func promptForPACReplacementConsentRequest(stdin io.Reader, stdout io.Writer, req pacReplacementConsentRequest) error {
 	if !req.needed() {
 		return nil
 	}
-	detail := &gatewayfacade.LifecycleConsentDetail{Requirements: []gatewayfacade.ConsentRequirement{{
-		Kind: gatewayfacade.ConsentRequirementManagedPACReplacement,
-		ManagedPACReplacement: &gatewayfacade.ManagedPACReplacementDetail{
-			CurrentPACState: pacStatesForPrompt(req.CurrentPACState),
-			CleanupMode:     gatewayfacade.CleanupModeNoPACRestoration,
-		},
-	}}}
-	return promptForLifecycleConsentDetail(stdin, stdout, detail)
+	detail := &gatewayfacade.PACReplacementConsentDetail{
+		CurrentPACState: pacStatesForPrompt(req.CurrentPACState),
+		CleanupMode:     gatewayfacade.CleanupModeNoPACRestoration,
+	}
+	return promptForPACReplacementConsent(stdin, stdout, detail)
 }
 
-func promptForLifecycleConsentDetail(stdin io.Reader, stdout io.Writer, detail *gatewayfacade.LifecycleConsentDetail) error {
-	if detail == nil || len(detail.Requirements) == 0 {
+func promptForPACReplacementConsent(stdin io.Reader, stdout io.Writer, detail *gatewayfacade.PACReplacementConsentDetail) error {
+	if detail == nil {
 		return nil
 	}
-	fmt.Fprintln(stdout, "Explicit Lifecycle Consent required before seamless-cors changes current-user OS-managed state.")
-	for _, req := range detail.Requirements {
-		if req.Kind != gatewayfacade.ConsentRequirementManagedPACReplacement || req.ManagedPACReplacement == nil {
-			continue
+	fmt.Fprintln(stdout, "PAC Replacement Consent required before seamless-cors changes current-user OS-managed PAC state.")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "seamless-cors will replace existing managed PAC state for this run.")
+	fmt.Fprintln(stdout, "Gateway Footprint Cleanup removes seamless-cors-owned managed PAC settings without restoring previous PAC state.")
+	fmt.Fprintln(stdout, "Current managed PAC state:")
+	for _, state := range detail.CurrentPACState {
+		url := state.URL
+		if url == "" {
+			url = "(empty)"
 		}
-		fmt.Fprintln(stdout)
-		fmt.Fprintln(stdout, "Managed PAC Consent:")
-		fmt.Fprintln(stdout, "seamless-cors will replace existing managed PAC state for this run.")
-		fmt.Fprintln(stdout, "Gateway Footprint Cleanup removes seamless-cors-owned managed PAC settings without restoring previous PAC state.")
-		fmt.Fprintln(stdout, "Current managed PAC state:")
-		for _, state := range req.ManagedPACReplacement.CurrentPACState {
-			url := state.URL
-			if url == "" {
-				url = "(empty)"
-			}
-			fmt.Fprintf(stdout, "  %s: enabled=%t url=%s\n", state.ServiceName, state.Enabled, url)
-		}
+		fmt.Fprintf(stdout, "  %s: %s -> seamless-cors owned (enabled=%t url=%s)\n", state.ServiceName, state.Ownership, state.Enabled, url)
 	}
 	fmt.Fprintln(stdout)
 	fmt.Fprint(stdout, "Proceed? [y/N] ")
@@ -414,7 +405,7 @@ func promptForLifecycleConsentDetail(stdin io.Reader, stdout io.Writer, detail *
 	}
 	if !ok {
 		fmt.Fprintln(stdout, "Startup canceled; no lifecycle changes were applied.")
-		return ErrLifecycleConsentDeclined
+		return ErrPACReplacementConsentDeclined
 	}
 	fmt.Fprintln(stdout)
 	return nil
@@ -432,15 +423,11 @@ func readYes(stdin io.Reader) (bool, error) {
 	return answer == "y" || answer == "yes", nil
 }
 
-func acceptConsent(detail *gatewayfacade.LifecycleConsentDetail) *gatewayfacade.LifecycleConsentInput {
+func acceptPACReplacementConsent(detail *gatewayfacade.PACReplacementConsentDetail) *gatewayfacade.PACReplacementConsentInput {
 	if detail == nil {
 		return nil
 	}
-	input := &gatewayfacade.LifecycleConsentInput{}
-	for _, req := range detail.Requirements {
-		input.AcceptedRequirements = append(input.AcceptedRequirements, req.Kind)
-	}
-	return input
+	return &gatewayfacade.PACReplacementConsentInput{Accepted: true}
 }
 
 func pacStatesForPrompt(states []platform.PACServiceState) []gatewayfacade.ManagedPACServiceState {
@@ -450,9 +437,20 @@ func pacStatesForPrompt(states []platform.PACServiceState) []gatewayfacade.Manag
 			ServiceName: state.Name,
 			Enabled:     state.Enabled,
 			URL:         state.URL,
+			Ownership:   pacOwnershipForPrompt(state.URL),
 		})
 	}
 	return out
+}
+
+func pacOwnershipForPrompt(raw string) gatewayfacade.PACOwnership {
+	if raw == "" || raw == "(null)" {
+		return gatewayfacade.PACOwnershipEmpty
+	}
+	if platform.IsManagedPACFootprint(raw) {
+		return gatewayfacade.PACOwnershipOwned
+	}
+	return gatewayfacade.PACOwnershipForeign
 }
 
 func renderStartResult(stdout io.Writer, result gatewayfacade.StartResult) {
@@ -467,6 +465,9 @@ func renderStartResult(stdout io.Writer, result gatewayfacade.StartResult) {
 			fmt.Fprintf(stdout, "domain-list: %s\n", result.Guidance.DomainListPath)
 			if result.Guidance.ManagedPACActive {
 				fmt.Fprintln(stdout, "managed-pac: active")
+				if len(result.Guidance.ManagedPACServices) > 0 {
+					fmt.Fprintf(stdout, "managed-pac-services: %s\n", strings.Join(result.Guidance.ManagedPACServices, ", "))
+				}
 			}
 		}
 	case gatewayfacade.StartResultAlreadyRunning:
@@ -534,6 +535,9 @@ func renderStatus(stdout io.Writer, result gatewayfacade.StatusResult) {
 		fmt.Fprintf(stdout, "domain-list: %s\n", result.Runtime.DomainListPath)
 		fmt.Fprintf(stdout, "domains: %d\n", result.Runtime.DomainCount)
 		fmt.Fprintln(stdout, "managed-pac: active")
+		if len(result.Runtime.ManagedPACServices) > 0 {
+			fmt.Fprintf(stdout, "managed-pac-services: %s\n", strings.Join(result.Runtime.ManagedPACServices, ", "))
+		}
 		fmt.Fprintf(stdout, "ca-trusted: %t\n", result.Runtime.CATrusted)
 		if len(result.Runtime.PendingLifecycle) > 0 {
 			var values []string

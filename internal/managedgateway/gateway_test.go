@@ -29,6 +29,8 @@ type fakeAdapter struct {
 	cleanedCA             int
 	caRecords             []platform.CARecord
 	trustErr              error
+	installErr            error
+	installFailAfter      int
 	clearErr              error
 	refreshErr            error
 	refreshFailAfter      int
@@ -48,18 +50,30 @@ func (f *fakeAdapter) Capabilities() platform.CapabilityReport {
 		RuntimeCleanup:    platform.CapabilitySupported,
 	}
 }
-func (f *fakeAdapter) InstallPAC(url string) ([]string, error) {
+func (f *fakeAdapter) InstallPAC(url string, services []string) ([]string, error) {
 	f.installedPAC = url
 	if len(f.pacStates) == 0 {
 		f.pacStates = []platform.PACServiceState{{Name: "Wi-Fi"}}
 	}
-	services := make([]string, 0, len(f.pacStates))
+	serviceSet := map[string]struct{}{}
+	for _, service := range services {
+		serviceSet[service] = struct{}{}
+	}
+	installed := make([]string, 0, len(f.pacStates))
+	mutated := 0
 	for idx := range f.pacStates {
-		services = append(services, f.pacStates[idx].Name)
+		if _, ok := serviceSet[f.pacStates[idx].Name]; !ok {
+			continue
+		}
+		installed = append(installed, f.pacStates[idx].Name)
 		f.pacStates[idx].URL = url
 		f.pacStates[idx].Enabled = true
+		mutated++
+		if f.installErr != nil && f.installFailAfter > 0 && mutated >= f.installFailAfter {
+			return installed, f.installErr
+		}
 	}
-	return services, nil
+	return installed, f.installErr
 }
 func (f *fakeAdapter) RefreshPAC(url string, services []string) error {
 	f.refreshedPAC = append(f.refreshedPAC, url)
@@ -81,10 +95,18 @@ func (f *fakeAdapter) RefreshPAC(url string, services []string) error {
 	return f.refreshErr
 }
 func (f *fakeAdapter) CurrentPACState() ([]platform.PACServiceState, error) {
+	if f.pacStates == nil {
+		f.pacStates = []platform.PACServiceState{{Name: "Wi-Fi"}}
+	}
 	return f.pacStates, nil
 }
 func (f *fakeAdapter) ClearOwnedPAC() error {
 	f.clearedPAC++
+	for idx := range f.pacStates {
+		if f.pacStates[idx].Enabled && platform.IsManagedPACFootprint(f.pacStates[idx].URL) {
+			f.pacStates[idx].Enabled = false
+		}
+	}
 	return f.clearErr
 }
 func (f *fakeAdapter) ClearPACForServices(url string, services []string) error {
@@ -138,10 +160,10 @@ func (f *fakeAdapter) RemoveCAs([]string) error {
 	return nil
 }
 
-func TestLifecycleConsentPromptReportsManagedPACOnly(t *testing.T) {
+func TestPACReplacementConsentPromptReportsManagedPACOnly(t *testing.T) {
 	var out bytes.Buffer
 
-	err := promptForLifecycleConsent(bytes.NewBufferString("yes"), &out, lifecycleConsentRequest{
+	err := promptForPACReplacementConsentRequest(bytes.NewBufferString("yes"), &out, pacReplacementConsentRequest{
 		ManagedPAC: true,
 		CurrentPACState: []platform.PACServiceState{{
 			Name:    "Wi-Fi",
@@ -155,8 +177,8 @@ func TestLifecycleConsentPromptReportsManagedPACOnly(t *testing.T) {
 
 	got := out.String()
 	for _, want := range []string{
-		"Explicit Lifecycle Consent required",
-		"Managed PAC Consent:",
+		"PAC Replacement Consent required",
+		"foreign -> seamless-cors owned",
 		"Proceed? [y/N]",
 	} {
 		if !strings.Contains(got, want) {
@@ -165,11 +187,11 @@ func TestLifecycleConsentPromptReportsManagedPACOnly(t *testing.T) {
 	}
 }
 
-func TestLifecycleConsentPromptDeclineCancels(t *testing.T) {
+func TestPACReplacementConsentPromptDeclineCancels(t *testing.T) {
 	var out bytes.Buffer
 
-	err := promptForLifecycleConsent(bytes.NewBufferString("no"), &out, lifecycleConsentRequest{ManagedPAC: true})
-	if !errors.Is(err, ErrLifecycleConsentDeclined) {
+	err := promptForPACReplacementConsentRequest(bytes.NewBufferString("no"), &out, pacReplacementConsentRequest{ManagedPAC: true})
+	if !errors.Is(err, ErrPACReplacementConsentDeclined) {
 		t.Fatalf("prompt error = %v", err)
 	}
 	if !strings.Contains(out.String(), "Startup canceled") {
@@ -207,8 +229,8 @@ func TestManagedGatewayUsesAdapterAndCleansUpLifecycleState(t *testing.T) {
 	if fake.trusted != 1 {
 		t.Fatalf("trusted calls = %d", fake.trusted)
 	}
-	if fake.scopedPACClears == 0 {
-		t.Fatalf("scoped PAC cleanup calls = %d", fake.scopedPACClears)
+	if fake.clearedPAC == 0 {
+		t.Fatalf("marker-based PAC cleanup calls = %d", fake.clearedPAC)
 	}
 	if !strings.Contains(out.String(), "Installed User CA added to the current user's SSL trust settings.") {
 		t.Fatalf("success output = %q", out.String())
@@ -361,7 +383,39 @@ func TestStartAllowsEmptyDomainListAndInstallsManagedPAC(t *testing.T) {
 	}
 }
 
-func TestStartDeclinedLifecycleConsentDoesNotMutateOSOrRuntimeState(t *testing.T) {
+func TestStartCleansPartialPACInstallFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	domainPath := filepath.Join(home, "domains.txt")
+	cfg := config.Default()
+	cfg.DomainList = domainPath
+	cfg.CATrusted = false
+
+	configureGatewayForTest(t, cfg, "api.example.test\n")
+	fake := &fakeAdapter{
+		pacStates: []platform.PACServiceState{
+			{Name: "Wi-Fi"},
+			{Name: "USB LAN"},
+		},
+		installErr:       errors.New("install denied"),
+		installFailAfter: 1,
+	}
+
+	err := StartWithContextAndInput(context.Background(), bytes.NewBufferString(""), io.Discard, fake)
+	if err == nil || !strings.Contains(err.Error(), "install denied") {
+		t.Fatalf("start error = %v", err)
+	}
+	if fake.clearedPAC == 0 {
+		t.Fatal("partial PAC install failure did not run marker-based cleanup")
+	}
+	for _, state := range fake.pacStates {
+		if state.Enabled && platform.IsManagedPACFootprint(state.URL) {
+			t.Fatalf("partial PAC install cleanup left owned PAC enabled: %#v", state)
+		}
+	}
+}
+
+func TestStartDeclinedPACReplacementConsentDoesNotMutateOSOrRuntimeState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	configDir := filepath.Join(home, ".seamless-cors")
@@ -386,7 +440,7 @@ func TestStartDeclinedLifecycleConsentDoesNotMutateOSOrRuntimeState(t *testing.T
 	var out bytes.Buffer
 
 	err := StartWithContextAndInput(context.Background(), bytes.NewBufferString("no"), &out, fake)
-	if !errors.Is(err, ErrLifecycleConsentDeclined) {
+	if !errors.Is(err, ErrPACReplacementConsentDeclined) {
 		t.Fatalf("start error = %v", err)
 	}
 	if fake.installedPAC != "" || fake.trusted != 0 {
@@ -395,13 +449,57 @@ func TestStartDeclinedLifecycleConsentDoesNotMutateOSOrRuntimeState(t *testing.T
 	if _, err := os.Stat(filepath.Join(configDir, "runtime", "gateway-state-cache.json")); !os.IsNotExist(err) {
 		t.Fatalf("declined consent wrote runtime state: %v", err)
 	}
-	for _, want := range []string{"Managed PAC Consent:", "without restoring previous PAC state"} {
+	for _, want := range []string{"PAC Replacement Consent required", "without restoring previous PAC state"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("consent output missing %q:\n%s", want, out.String())
 		}
 	}
 	if strings.Contains(out.String(), "CA Trust Consent:") {
-		t.Fatalf("CA trust should not use terminal lifecycle consent:\n%s", out.String())
+		t.Fatalf("CA trust should not use PAC Replacement Consent prompt:\n%s", out.String())
+	}
+}
+
+func TestManagedGatewayLeaseChecksSelectedServiceAfterReappearance(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	domainPath := filepath.Join(home, "domains.txt")
+	cfg := config.Default()
+	cfg.DomainList = domainPath
+	cfg.CATrusted = false
+
+	configureGatewayForTest(t, cfg, "api.example.test\n")
+	fake := &fakeAdapter{
+		pacStates: []platform.PACServiceState{
+			{Name: "Wi-Fi"},
+			{Name: "USB LAN"},
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake) }()
+	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
+	waitForInstalledPAC(t, fake)
+
+	fake.pacStates = []platform.PACServiceState{{
+		Name:    "Wi-Fi",
+		URL:     fake.installedPAC,
+		Enabled: true,
+	}}
+	assertStillRunning(t, done)
+
+	fake.pacStates = append(fake.pacStates, platform.PACServiceState{
+		Name:    "USB LAN",
+		URL:     "http://user.example/proxy.pac",
+		Enabled: true,
+	})
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "managed PAC lease lost") {
+			t.Fatalf("serve error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime owner did not exit after selected service reappeared with foreign PAC")
 	}
 }
 
@@ -644,7 +742,7 @@ func TestRuntimeOwnerCleansUpWhenGatewayStateLeaseIsLost(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("runtime owner did not exit after lease loss")
 	}
-	if fake.scopedPACClears == 0 {
+	if fake.clearedPAC == 0 {
 		t.Fatal("runtime owner did not run Gateway Footprint Cleanup after lease loss")
 	}
 }
@@ -867,14 +965,14 @@ func TestManagedGatewayStopsWhenManagedPACLeaseIsLostAndPreservesUserPAC(t *test
 	if fake.pacStates[0].URL != "http://user.example/proxy.pac" || !fake.pacStates[0].Enabled {
 		t.Fatalf("cleanup touched user PAC state: %#v", fake.pacStates[0])
 	}
-	if !fake.pacStates[2].Enabled {
-		t.Fatalf("cleanup touched untracked new service: %#v", fake.pacStates[2])
+	if fake.pacStates[2].Enabled {
+		t.Fatalf("marker-based cleanup did not clear owned new service: %#v", fake.pacStates[2])
 	}
 	if fake.pacStates[1].Enabled {
 		t.Fatalf("cleanup did not clear still-owned managed service: %#v", fake.pacStates[1])
 	}
-	if fake.scopedPACClears != 1 {
-		t.Fatalf("scoped PAC clears = %d, want 1", fake.scopedPACClears)
+	if fake.clearedPAC == 0 {
+		t.Fatalf("marker-based PAC cleanup calls = %d", fake.clearedPAC)
 	}
 }
 
@@ -926,8 +1024,8 @@ func TestManagedGatewayCleansAttemptedPACURLAfterPartialRefreshFailure(t *testin
 			t.Fatalf("cleanup left managed service enabled after partial refresh failure: %#v", state)
 		}
 	}
-	if fake.scopedPACClears != 2 {
-		t.Fatalf("scoped PAC clears = %d, want 2", fake.scopedPACClears)
+	if fake.clearedPAC == 0 {
+		t.Fatalf("marker-based PAC cleanup calls = %d", fake.clearedPAC)
 	}
 }
 
@@ -1215,6 +1313,15 @@ func assertNoPACRefresh(t *testing.T, fake *fakeAdapter) {
 			t.Fatalf("unexpected PAC refresh: %v", fake.refreshedPAC)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func assertStillRunning(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		t.Fatalf("gateway exited early: %v", err)
+	case <-time.After(300 * time.Millisecond):
 	}
 }
 

@@ -41,7 +41,7 @@ An HTTP start behavior where an HTTP client uses `GET /start/plan` followed by `
 _Avoid_: CLI start delegation, terminal prompt in serve, duplicate router start, serve-blocked start, split-brain gateway
 
 **Start-Hosted Router**:
-A startup behavior where gateway start becomes the Gateway Owner by hosting the Gateway Router and Gateway Runtime while gateway activation remains governed by Explicit Lifecycle Consent and Lifecycle Activation Order.
+A startup behavior where gateway start becomes the Gateway Owner by hosting the Gateway Router and Gateway Runtime while gateway activation remains governed by PAC Replacement Consent and Gateway Activation Order.
 _Avoid_: router-only fallback, control endpoint replacement, implicit consent
 
 **Router-Hosted Start Failure**:
@@ -208,9 +208,13 @@ _Avoid_: backward-compatible alias, migration, obsolete-setting special case
 A configuration behavior where an invalid, missing, or unreadable config file causes the gateway to report the validation problem, perform Gateway Footprint Cleanup, and stop.
 _Avoid_: silent config fallback, stale config after invalid edit
 
-**Lifecycle Operation**:
-A gateway operation chosen explicitly through a command or start-time flag because it can affect OS proxy settings or certificate authority identity.
-_Avoid_: live OS reconfiguration, config-triggered permission prompt
+**Gateway Control Command**:
+A user-facing command that controls gateway-owned state or reports on it, including start, serve, stop, status, check, UserCA install, and UserCA uninstall.
+_Avoid_: lifecycle operation, command service, control endpoint operation
+
+**Gateway Activation**:
+The Gateway Facade behavior that turns accepted start intent into active Gateway Runtime, Installed User CA readiness, managed PAC state, and Start Guidance.
+_Avoid_: lifecycle activation, runtime startup, command rendering, lifecycle orchestration package
 
 **Automatic Listeners**:
 A lifecycle behavior where the gateway chooses available loopback ports for its proxy, PAC, and router endpoints at startup, then wires dependent gateway state in sequence.
@@ -276,9 +280,13 @@ _Avoid_: footprint-based cleanup, previous-state restoration, guessed ownership
 The stable loopback HTTP PAC URL shape whose path ends in `seamless-cors.pac`, proving a current managed PAC setting belongs to seamless-cors without depending on a run-specific port.
 _Avoid_: managed PAC footprint, run-specific PAC identity, port-based ownership, full-URL ownership, non-loopback PAC ownership
 
+**Managed PAC Service Set**:
+The network services selected during Gateway Activation for PAC Routing installation, PAC refresh, and Managed PAC Lease checks throughout that Gateway Owner run.
+_Avoid_: live service discovery for refresh, current service list, implicit service expansion, plan-time service lock
+
 **Managed PAC Lease**:
-A running Gateway Owner's ownership rule that treats the installed seamless-cors Managed PAC URL as live state and shuts down if supported platform inspection shows that managed PAC state was disabled, removed, or replaced outside the gateway.
-_Avoid_: forced PAC restoration, foreign PAC cleanup, silent proxy escape, best-effort PAC ownership
+A running Gateway Owner's ownership rule that treats the installed seamless-cors Managed PAC URL as live state for visible services in the Managed PAC Service Set, shutting down only when supported platform inspection shows that visible managed PAC state was disabled or replaced outside the gateway.
+_Avoid_: forced PAC restoration, foreign PAC cleanup, silent proxy escape, best-effort PAC ownership, missing-service failure
 
 **Managed PAC Lease Lost**:
 A user-facing fatal runtime condition where the gateway reports `managed-pac-lease-lost` when its managed PAC state was changed outside the gateway, then gives restart or cleanup guidance without restoring foreign PAC state.
@@ -305,7 +313,7 @@ A First-Start Bootstrap behavior where generated configuration includes short co
 _Avoid_: opaque default config, verbose manual, runtime listener settings
 
 **Start Guidance**:
-A start-time user-facing output behavior shown only after required lifecycle consent and platform approval have succeeded, pointing to the editable Explicit Configuration, Domain List, and managed PAC state instead of runtime listener endpoints.
+A start-time user-facing output behavior shown only after required PAC Replacement Consent and platform approval have succeeded, pointing to the editable Explicit Configuration, Domain List, and managed PAC state instead of runtime listener endpoints.
 _Avoid_: pre-approval running message, listener-first start output, proxy setup instructions, PAC listener summary, control listener summary
 
 **Start Guidance Detail**:
@@ -313,7 +321,7 @@ A surface-neutral successful start result detail containing the user-relevant co
 _Avoid_: terminal start text, listener status detail, proxy setup instructions
 
 **Start Plan**:
-A pre-activation start result that reports whether startup can proceed and whether Explicit Lifecycle Consent is required without changing OS-managed state or runtime visibility.
+A pre-activation start result that reports whether startup can proceed and whether PAC Replacement Consent is required without changing OS-managed state or runtime visibility.
 _Avoid_: dry run, prompt callback, interactive start state machine
 
 **Already-Running Start**:
@@ -321,7 +329,7 @@ An idempotent start result where planning or executing start against an active G
 _Avoid_: duplicate runtime activation, start failure for active runtime, second owner
 
 **Execute-Time Start Recheck**:
-A start execution rule where `ExecuteStart` recomputes decisive lifecycle conditions before mutating and returns a structured consent-required result when supplied consent is missing or no longer sufficient.
+A start execution rule where `ExecuteStart` recomputes decisive PAC Replacement Consent conditions before mutating and returns a structured consent-required result when supplied confirmation is missing or no longer sufficient.
 _Avoid_: plan-as-authorization, plan token, mutation-before-recheck
 
 **Single-Flight Start**:
@@ -329,7 +337,7 @@ A start behavior where a Gateway Owner allows independent read-only Start Plans 
 _Avoid_: queued mutation, duplicate mutation, competing activation, plan reservation
 
 **Platform-Approval-Denied Start**:
-A start execution outcome where required platform-owned trust approval is denied after gateway lifecycle consent, so Gateway Runtime and managed PAC state are not activated.
+A start execution outcome where required platform-owned trust approval is denied after PAC Replacement Consent is accepted, so Gateway Runtime and managed PAC state are not activated.
 _Avoid_: consent-required start, infrastructure error, partial trusted start
 
 **Pending Lifecycle Change**:
@@ -340,37 +348,33 @@ _Avoid_: surprise permission prompt, implicit restart
 A lifecycle behavior where Pending Lifecycle Changes take effect only after the gateway is restarted.
 _Avoid_: apply-lifecycle command, hot lifecycle swap
 
-**Explicit Lifecycle Consent**:
-A start-time user agreement collected before the gateway intentionally changes current-user OS-managed state, limited to gateway-owned lifecycle consent and not a substitute for platform-owned trust approval.
-_Avoid_: implicit consent, persistent consent, surprise permission prompt, partial lifecycle consent, platform approval
+**PAC Replacement Consent Detail**:
+A surface-neutral description of the current managed PAC state and no-restoration cleanup behavior shown when PAC Replacement Consent is required.
+_Avoid_: lifecycle consent detail, prompt text, OS trust approval payload, plan token
 
-**Lifecycle Consent Detail**:
-A surface-neutral description of the gateway-owned lifecycle changes that currently require Explicit Lifecycle Consent, shared by start planning and start execution when consent is required.
-_Avoid_: plan-only consent payload, execute-only consent payload, prompt text, OS trust approval payload, plan token
-
-**Managed PAC Consent**:
-An Explicit Lifecycle Consent required when gateway start would overwrite a non-owned configured PAC URL in a managed OS service, showing current managed PAC state and explaining that Gateway Footprint Cleanup removes seamless-cors-owned managed PAC settings without restoring previous PAC state.
+**PAC Replacement Consent**:
+User confirmation required when gateway start would overwrite a non-owned configured PAC URL in a managed OS service, shown during start planning and rechecked during Gateway Activation before mutation.
 _Avoid_: silent proxy replacement, proxy chaining, broad proxy takeover
 
 **Independent PAC Lifecycle**:
-A lifecycle boundary where Managed PAC Consent and PAC Routing setup follow gateway start independently of whether the Domain List currently has active entries.
+A lifecycle boundary where PAC Replacement Consent and PAC Routing setup follow gateway start independently of whether the Domain List currently has active entries.
 _Avoid_: domain-gated PAC setup, delayed proxy ownership, route-count-based lifecycle
 
 **CA Trust Consent**:
 A platform approval moment required before adding or replacing Installed User CA trust for HTTPS interception, with gateway context shown only when the platform requires approval.
-_Avoid_: implicit CA trust, repeated consent for unchanged trust, app-only trust prompt, Lifecycle Consent Detail
+_Avoid_: implicit CA trust, repeated consent for unchanged trust, app-only trust prompt, PAC Replacement Consent Detail
 
 **Independent CA Lifecycle**:
 A lifecycle boundary where CA Trust Consent and Installed User CA availability follow `ca-trusted` independently of whether the Domain List currently has active entries.
 _Avoid_: domain-gated CA trust, implicit CA delay, route-dependent trust setup
 
-**Lifecycle Activation Order**:
-A startup lifecycle boundary where required CA trust approval and CA Ensure finish before managed PAC state and Gateway Runtime activation are established, and Start Guidance is shown only after activation has succeeded.
-_Avoid_: pre-validation trust changes, PAC-before-trust startup, degraded trusted mode, pre-approval runtime state, start-success-before-approval, half-started gateway
+**Gateway Activation Order**:
+A startup lifecycle boundary where execute-time consent recheck is followed immediately by required CA trust approval and CA Ensure before Gateway Runtime preparation, managed PAC state, runtime activation, or Start Guidance.
+_Avoid_: lifecycle activation order, pre-validation trust changes, runtime-before-trust startup, PAC-before-trust startup, degraded trusted mode, cleanup-required trust denial, start-success-before-approval, half-started gateway
 
 **All-Service PAC Management**:
-A Managed System Proxy behavior where supported platform adapters apply PAC Routing to every network service they manage, so routing remains consistent when the active network changes during a gateway run.
-_Avoid_: active-service-only PAC, partial network setup
+A Managed System Proxy behavior where Gateway Activation selects every network service the supported platform adapter manages at activation time, so PAC Routing is consistent across the Managed PAC Service Set for that Gateway Owner run.
+_Avoid_: active-service-only PAC, partial network setup, silent service expansion
 
 **Minimal Command Surface**:
 The user-facing command model where normal operation is limited to starting, stopping, and viewing gateway status while runtime behavior follows Live Configuration.
@@ -602,7 +606,7 @@ Developer: "Can I avoid changing my system proxy settings?"
 
 QA engineer: "No, the gateway uses Managed System Proxy so application requests keep their original URLs."
 
-Developer: "What if I decline the Managed PAC Consent prompt?"
+Developer: "What if I decline the PAC Replacement Consent prompt?"
 
 QA engineer: "Start stops without changing machine proxy settings because there is no manual proxy fallback."
 
@@ -712,7 +716,7 @@ QA engineer: "Gateway Footprint Cleanup removes leftover seamless-cors-owned man
 
 Developer: "What if I already use a corporate proxy?"
 
-QA engineer: "Managed PAC Consent shows the current managed PAC state and asks before replacing existing PAC settings for this run."
+QA engineer: "PAC Replacement Consent shows the current managed PAC state and asks before replacing existing PAC settings for this run."
 
 Developer: "What do I need to configure before starting?"
 

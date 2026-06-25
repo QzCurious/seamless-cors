@@ -58,8 +58,8 @@ func TestStartAllowsEmptyBody(t *testing.T) {
 	if !facade.startCalled {
 		t.Fatal("facade ExecuteStart was not called")
 	}
-	if facade.startRequest.Consent != nil {
-		t.Fatalf("start request consent = %#v, want nil", facade.startRequest.Consent)
+	if facade.startRequest.PACReplacementConsent != nil {
+		t.Fatalf("start request pac replacement consent = %#v, want nil", facade.startRequest.PACReplacementConsent)
 	}
 }
 

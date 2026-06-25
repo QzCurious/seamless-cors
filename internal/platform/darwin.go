@@ -53,27 +53,42 @@ func (a *DarwinAdapter) Capabilities() CapabilityReport {
 	}
 }
 
-func (a *DarwinAdapter) InstallPAC(url string) ([]string, error) {
-	services, err := a.listServices()
+func (a *DarwinAdapter) InstallPAC(url string, services []string) ([]string, error) {
+	installed, err := a.updatePAC(url, services)
 	if err != nil {
 		return nil, err
 	}
-	if err := a.RefreshPAC(url, services); err != nil {
-		return nil, err
-	}
-	return services, nil
+	return installed, nil
 }
 
 func (a *DarwinAdapter) RefreshPAC(url string, services []string) error {
+	_, err := a.updatePAC(url, services)
+	return err
+}
+
+func (a *DarwinAdapter) updatePAC(url string, services []string) ([]string, error) {
+	states, err := a.CurrentPACState()
+	if err != nil {
+		return nil, err
+	}
+	visible := map[string]struct{}{}
+	for _, state := range states {
+		visible[state.Name] = struct{}{}
+	}
+	var installed []string
 	for _, service := range services {
+		if _, ok := visible[service]; !ok {
+			continue
+		}
 		if _, err := a.networksetup("-setautoproxyurl", service, url); err != nil {
-			return err
+			return installed, err
 		}
 		if _, err := a.networksetup("-setautoproxystate", service, "on"); err != nil {
-			return err
+			return installed, err
 		}
+		installed = append(installed, service)
 	}
-	return nil
+	return installed, nil
 }
 
 func (a *DarwinAdapter) CurrentPACState() ([]PACServiceState, error) {

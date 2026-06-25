@@ -46,7 +46,7 @@ type PACServiceState struct {
 
 type Adapter interface {
 	Capabilities() CapabilityReport
-	InstallPAC(url string) ([]string, error)
+	InstallPAC(url string, services []string) ([]string, error)
 	RefreshPAC(url string, services []string) error
 	CurrentPACState() ([]PACServiceState, error)
 	ClearOwnedPAC() error
@@ -67,7 +67,7 @@ func (NoopAdapter) Capabilities() CapabilityReport {
 		RuntimeCleanup:    CapabilityLimited,
 	}
 }
-func (NoopAdapter) InstallPAC(string) ([]string, error) {
+func (NoopAdapter) InstallPAC(string, []string) ([]string, error) {
 	return nil, fmt.Errorf("managed PAC routing is unsupported on this platform")
 }
 func (NoopAdapter) RefreshPAC(string, []string) error {
