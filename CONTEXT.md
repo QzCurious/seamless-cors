@@ -24,9 +24,13 @@ _Avoid_: global result code, shared outcome enum, impossible command state
 An HTTP command surface that exposes user-facing gateway feature routes and renders Gateway Facade results as HTTP responses.
 _Avoid_: runtime control endpoint, proxy route, daemon supervisor
 
+**Gateway Client**:
+A typed client-facing layer used by CLI and future user interfaces to discover and call an existing Gateway Owner's Gateway Router through the Gateway State Cache identity.
+_Avoid_: command service, lifecycle client, generic JSON caller, managed gateway
+
 **Gateway Owner**:
-The foreground process that owns the Gateway Router and user-facing gateway command authority and, when active, the Gateway Runtime and Gateway Footprint Cleanup responsibility.
-_Avoid_: daemon supervisor, client command, detached runtime owner
+The foreground process-lifetime module that owns Gateway Router publication, Gateway State Cache lease identity, router-only serving, direct-start owner startup, and, when active, Gateway Runtime and Gateway Footprint Cleanup responsibility.
+_Avoid_: daemon supervisor, client command, detached runtime owner, terminal command renderer
 
 **Gateway Runtime**:
 The live traffic-serving engine that owns the proxy listener, proxy server, PAC listener, PAC server, live configuration, runtime close behavior, and fatal runtime error reporting without installing or unsetting OS PAC state.

@@ -6,8 +6,6 @@ import (
 	"io"
 	"strings"
 
-	"seamless-cors/internal/app"
-	"seamless-cors/internal/managedgateway"
 	"seamless-cors/internal/managedpac"
 )
 
@@ -24,13 +22,13 @@ const usage = `Usage:
 // Run dispatches the v1 Minimal Command Surface.
 func Run(args []string, stdout, stderr io.Writer) error {
 	return run(args, stdout, stderr, commandHandlers{
-		check:     app.Check,
-		install:   app.Install,
-		uninstall: app.Uninstall,
-		serve:     managedgateway.Serve,
-		start:     managedgateway.Start,
-		stop:      managedgateway.Stop,
-		status:    managedgateway.Status,
+		check:     Check,
+		install:   Install,
+		uninstall: Uninstall,
+		serve:     Serve,
+		start:     Start,
+		stop:      Stop,
+		status:    Status,
 	})
 }
 

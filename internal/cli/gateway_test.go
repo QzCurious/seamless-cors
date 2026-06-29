@@ -1,4 +1,4 @@
-package managedgateway
+package cli
 
 import (
 	"bytes"
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"seamless-cors/internal/config"
+	"seamless-cors/internal/gatewayclient"
 	"seamless-cors/internal/gatewaycoord"
 	"seamless-cors/internal/gatewayfacade"
 	"seamless-cors/internal/managedpac"
@@ -201,7 +202,7 @@ func TestManagedGatewayUsesAdapterAndCleansUpLifecycleState(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := (Gateway{Adapter: fake, Stdout: &out}).Start(ctx); err != nil {
+	if err := StartWithContextAndInput(ctx, nil, &out, fake); err != nil {
 		t.Fatal(err)
 	}
 
@@ -237,7 +238,7 @@ func TestManagedGatewayPrintsCancelMessageWhenTrustApprovalDenied(t *testing.T) 
 	fake := &fakeAdapter{trustErr: platform.ErrTrustApprovalDenied}
 	var out bytes.Buffer
 
-	err := (Gateway{Adapter: fake, Stdout: &out}).Start(context.Background())
+	err := StartWithContextAndInput(context.Background(), nil, &out, fake)
 	if !errors.Is(err, platform.ErrTrustApprovalDenied) {
 		t.Fatalf("serve error = %v", err)
 	}
@@ -276,7 +277,7 @@ func TestManagedGatewayWaitsForCATrustApprovalBeforeActivation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- (Gateway{Adapter: fake, Stdout: &out}).Start(ctx) }()
+	go func() { done <- StartWithContextAndInput(ctx, nil, &out, fake) }()
 	<-fake.trustStarted
 
 	if fake.installedPAC != "" {
@@ -505,8 +506,8 @@ func TestStartWithVerifiedActiveGatewaySkipsCleanupAndConfigValidation(t *testin
 	secondAdapter := &fakeAdapter{}
 	var out bytes.Buffer
 
-	if err := StartWithContextAndInput(context.Background(), bytes.NewBufferString(""), &out, secondAdapter); err != nil {
-		t.Fatal(err)
+	if err := StartWithContextAndInput(context.Background(), bytes.NewBufferString(""), &out, secondAdapter); err == nil || !strings.Contains(err.Error(), "gateway owner already running") {
+		t.Fatalf("start error = %v", err)
 	}
 	if secondAdapter.clearedPAC != 0 || secondAdapter.cleanedCA != 0 {
 		t.Fatalf("active second start ran cleanup: PAC=%d CA=%d", secondAdapter.clearedPAC, secondAdapter.cleanedCA)
@@ -530,7 +531,7 @@ func TestServeOwnerPublishesRouterOnlyOwnerWithoutManagedPAC(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 
-	go func() { done <- (Gateway{Adapter: fake, Stdout: &out}).ServeOwner(ctx) }()
+	go func() { done <- ServeWithContext(ctx, &out, fake) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
 	waitForStatusOutput(t, "gateway-runtime: inactive")
 	if status := currentStatusOutput(t); strings.Contains(status, "cleanup-needed") {
@@ -540,10 +541,8 @@ func TestServeOwnerPublishesRouterOnlyOwnerWithoutManagedPAC(t *testing.T) {
 	if fake.installedPAC != "" || fake.clearedPAC != 0 || fake.trusted != 0 {
 		t.Fatalf("serve mutated lifecycle state: PAC=%q cleared=%d trusted=%d", fake.installedPAC, fake.clearedPAC, fake.trusted)
 	}
-	if running, err := Running(); err != nil {
-		t.Fatal(err)
-	} else if running {
-		t.Fatal("router-only owner should not report Gateway Runtime as running")
+	if status := currentStatusOutput(t); !strings.Contains(status, "gateway-runtime: inactive") {
+		t.Fatalf("router-only owner should not report Gateway Runtime as running:\n%s", status)
 	}
 
 	cancel()
@@ -571,7 +570,7 @@ func TestRouterHostedStartOutlivesHTTPStartRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- (Gateway{Adapter: fake, Stdout: io.Discard}).ServeOwner(ctx) }()
+	go func() { done <- ServeWithContext(ctx, io.Discard, fake) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
 
 	coord, err := gatewaycoord.Default()
@@ -579,8 +578,8 @@ func TestRouterHostedStartOutlivesHTTPStartRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	cache := coord.Verify().Cache
-	var result gatewayfacade.StartResult
-	if err := callJSON(http.MethodPost, cache, "/start", nil, &result); err != nil {
+	result, err := gatewayclient.New(cache).Start(gatewayfacade.StartRequest{})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Kind != gatewayfacade.StartResultStarted {
@@ -609,13 +608,13 @@ func TestStartWithRouterOnlyOwnerFailsWithoutDelegatingOrCleanup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- (Gateway{Adapter: ownerAdapter, Stdout: io.Discard}).ServeOwner(ctx) }()
+	go func() { done <- ServeWithContext(ctx, io.Discard, ownerAdapter) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
 
 	startAdapter := &fakeAdapter{}
 	var out bytes.Buffer
-	if err := StartWithContextAndInput(context.Background(), bytes.NewBufferString(""), &out, startAdapter); err != nil {
-		t.Fatal(err)
+	if err := StartWithContextAndInput(context.Background(), bytes.NewBufferString(""), &out, startAdapter); err == nil || !strings.Contains(err.Error(), "gateway owner already running") {
+		t.Fatalf("start error = %v", err)
 	}
 	if !strings.Contains(out.String(), "gateway owner already running") {
 		t.Fatalf("start output = %q", out.String())
@@ -645,7 +644,7 @@ func TestServeOwnerMayClaimStaleCacheWithoutGatewayFootprintCleanup(t *testing.T
 	defer cancel()
 	done := make(chan error, 1)
 
-	go func() { done <- (Gateway{Adapter: fake, Stdout: io.Discard}).ServeOwner(ctx) }()
+	go func() { done <- ServeWithContext(ctx, io.Discard, fake) }()
 	waitForStatusOutput(t, "gateway-runtime: inactive")
 
 	if fake.clearedPAC != 0 {
@@ -663,7 +662,7 @@ func TestServeOwnerExitsWhenGatewayStateLeaseIsLost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- (Gateway{Adapter: &fakeAdapter{}, Stdout: io.Discard}).ServeOwner(ctx) }()
+	go func() { done <- ServeWithContext(ctx, io.Discard, &fakeAdapter{}) }()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
 	runtimeDir, err := config.RuntimeDir()
 	if err != nil {
@@ -753,7 +752,7 @@ func TestStopReportsOwnerCleanupFailureAndKeepsOwnerForRetry(t *testing.T) {
 
 	fake.clearErr = errors.New("pac cleanup denied")
 	var out bytes.Buffer
-	err := (Gateway{Adapter: fake, Stdout: &out}).Stop()
+	err := stop(&out, fake)
 	if err == nil || !strings.Contains(err.Error(), "pac cleanup denied") {
 		t.Fatalf("stop error = %v", err)
 	}
@@ -762,15 +761,17 @@ func TestStopReportsOwnerCleanupFailureAndKeepsOwnerForRetry(t *testing.T) {
 		t.Fatalf("owner exited after failed cleanup: %v", err)
 	default:
 	}
-	if active, err := activeOwnerState(); err != nil {
+	target, err := gatewayclient.Discover()
+	if err != nil {
 		t.Fatal(err)
-	} else if !active {
+	}
+	if target.Kind != gatewayclient.TargetActive {
 		t.Fatal("owner was not reachable after failed cleanup")
 	}
 
 	fake.clearErr = nil
 	out.Reset()
-	if err := (Gateway{Adapter: fake, Stdout: &out}).Stop(); err != nil {
+	if err := stop(&out, fake); err != nil {
 		t.Fatal(err)
 	}
 	select {

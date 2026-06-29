@@ -1,4 +1,4 @@
-package app
+package cli
 
 import (
 	"bytes"
@@ -11,15 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"seamless-cors/internal/config"
-	"seamless-cors/internal/managedgateway"
 	"seamless-cors/internal/platform"
 	"seamless-cors/internal/userca"
 )
 
-type fakeAdapter struct {
+type appFakeAdapter struct {
 	installedPAC string
 	pacStates    []platform.PACServiceState
 	clearedPAC   int
@@ -29,7 +27,7 @@ type fakeAdapter struct {
 	trustErr     error
 }
 
-func (f *fakeAdapter) Capabilities() platform.CapabilityReport {
+func (f *appFakeAdapter) Capabilities() platform.CapabilityReport {
 	return platform.CapabilityReport{
 		Platform:          "test/test",
 		Supported:         true,
@@ -38,25 +36,25 @@ func (f *fakeAdapter) Capabilities() platform.CapabilityReport {
 		RuntimeCleanup:    platform.CapabilitySupported,
 	}
 }
-func (f *fakeAdapter) InstallPAC(url string, services []string) ([]string, error) {
+func (f *appFakeAdapter) InstallPAC(url string, services []string) ([]string, error) {
 	f.installedPAC = url
 	return append([]string(nil), services...), nil
 }
-func (f *fakeAdapter) RefreshPAC(string, []string) error { return nil }
-func (f *fakeAdapter) CurrentPACState() ([]platform.PACServiceState, error) {
+func (f *appFakeAdapter) RefreshPAC(string, []string) error { return nil }
+func (f *appFakeAdapter) CurrentPACState() ([]platform.PACServiceState, error) {
 	if f.pacStates == nil {
 		f.pacStates = []platform.PACServiceState{{Name: "Wi-Fi"}}
 	}
 	return f.pacStates, nil
 }
-func (f *fakeAdapter) ClearOwnedPAC() error {
+func (f *appFakeAdapter) ClearOwnedPAC() error {
 	f.clearedPAC++
 	return nil
 }
-func (f *fakeAdapter) TrustedCAs() ([]platform.CARecord, error) {
+func (f *appFakeAdapter) TrustedCAs() ([]platform.CARecord, error) {
 	return append([]platform.CARecord(nil), f.caRecords...), nil
 }
-func (f *fakeAdapter) TrustCA(certPEM []byte) error {
+func (f *appFakeAdapter) TrustCA(certPEM []byte) error {
 	f.trusted++
 	if f.trustErr == nil {
 		fingerprint, err := userca.SHA1Fingerprint(certPEM)
@@ -75,7 +73,7 @@ func (f *fakeAdapter) TrustCA(certPEM []byte) error {
 	}
 	return f.trustErr
 }
-func (f *fakeAdapter) RemoveCAs([]string) error {
+func (f *appFakeAdapter) RemoveCAs([]string) error {
 	f.cleanedCA++
 	f.caRecords = nil
 	return nil
@@ -84,7 +82,7 @@ func (f *fakeAdapter) RemoveCAs([]string) error {
 func TestCheckReportsCapabilitiesWithoutCreatingHomeConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	restoreAdapter(t, &fakeAdapter{})
+	restoreAdapter(t, &appFakeAdapter{})
 	var out bytes.Buffer
 
 	if err := Check(&out, &bytes.Buffer{}); err != nil {
@@ -109,7 +107,7 @@ func TestCheckReportsCapabilitiesWithoutCreatingHomeConfig(t *testing.T) {
 func TestInstallIsConfigIndependentAndIdempotent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	fake := &fakeAdapter{}
+	fake := &appFakeAdapter{}
 	restoreAdapter(t, fake)
 	var out bytes.Buffer
 
@@ -143,20 +141,20 @@ func TestUninstallRefusesWhileManagedGatewayIsRunning(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeConfigForGateway(t, filepath.Join(configDir, "config.yaml"), config.Config{
+	writeConfigForRuntime(t, filepath.Join(configDir, "config.yaml"), config.Config{
 		DomainList: domainPath,
 		CATrusted:  false,
 	})
 	if err := os.WriteFile(domainPath, []byte("api.example.test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fake := &fakeAdapter{}
+	fake := &appFakeAdapter{}
 	restoreAdapter(t, fake)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- managedgateway.StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake)
+		done <- StartWithContextAndInput(ctx, bytes.NewBufferString(""), io.Discard, fake)
 	}()
 	waitForFile(t, filepath.Join(configDir, "runtime", "gateway-state-cache.json"))
 
@@ -178,13 +176,13 @@ func TestUninstallRefusesWhileManagedGatewayIsRunning(t *testing.T) {
 func TestUninstallAllowsRouterOnlyGatewayOwner(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	fake := &fakeAdapter{}
+	fake := &appFakeAdapter{}
 	restoreAdapter(t, fake)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- managedgateway.ServeWithContext(ctx, io.Discard, fake)
+		done <- ServeWithContext(ctx, io.Discard, fake)
 	}()
 	waitForFile(t, filepath.Join(home, ".seamless-cors", "runtime", "gateway-state-cache.json"))
 
@@ -200,34 +198,4 @@ func TestUninstallAllowsRouterOnlyGatewayOwner(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-}
-
-func restoreAdapter(t *testing.T, adapter platform.Adapter) {
-	t.Helper()
-	previous := platform.CurrentAdapter
-	platform.CurrentAdapter = adapter
-	t.Cleanup(func() {
-		platform.CurrentAdapter = previous
-	})
-}
-
-func writeConfigForGateway(t *testing.T, path string, cfg config.Config) {
-	t.Helper()
-	text := "domain-list: " + cfg.DomainList + "\n" +
-		"ca-trusted: " + map[bool]string{true: "true", false: "false"}[cfg.CATrusted] + "\n"
-	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func waitForFile(t *testing.T, path string) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", path)
 }
