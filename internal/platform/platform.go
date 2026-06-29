@@ -50,7 +50,6 @@ type Adapter interface {
 	RefreshPAC(url string, services []string) error
 	CurrentPACState() ([]PACServiceState, error)
 	ClearOwnedPAC() error
-	ClearPACForServices(url string, services []string) error
 	TrustedCAs() ([]CARecord, error)
 	TrustCA(certPEM []byte) error
 	RemoveCAs(fingerprints []string) error
@@ -75,7 +74,6 @@ func (NoopAdapter) RefreshPAC(string, []string) error {
 }
 func (NoopAdapter) CurrentPACState() ([]PACServiceState, error) { return nil, nil }
 func (NoopAdapter) ClearOwnedPAC() error                        { return nil }
-func (NoopAdapter) ClearPACForServices(string, []string) error  { return nil }
 func (NoopAdapter) TrustedCAs() ([]CARecord, error)             { return nil, nil }
 func (NoopAdapter) TrustCA([]byte) error                        { return nil }
 func (NoopAdapter) RemoveCAs([]string) error                    { return nil }

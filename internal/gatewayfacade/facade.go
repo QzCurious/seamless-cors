@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,11 +13,10 @@ import (
 	"seamless-cors/internal/gatewaycoord"
 	"seamless-cors/internal/gatewayruntime"
 	"seamless-cors/internal/liveconfig"
+	"seamless-cors/internal/managedpac"
 	"seamless-cors/internal/platform"
 	"seamless-cors/internal/userca"
 )
-
-var ErrManagedPACLeaseLost = errors.New("managed PAC lease lost")
 
 type StartPlanKind string
 
@@ -245,37 +243,11 @@ type Facade struct {
 }
 
 type activeRuntime struct {
-	engine             *gatewayruntime.Runtime
-	live               liveconfig.Config
-	cancel             context.CancelFunc
-	done               chan error
-	mu                 sync.RWMutex
-	managedPACURL      string
-	attemptedPACURL    string
-	managedPACServices []string
-}
-
-func (r *activeRuntime) managedPACScope() cleanup.ManagedPACScope {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return cleanup.ManagedPACScope{
-		URL:      r.managedPACURL,
-		URLs:     []string{r.attemptedPACURL},
-		Services: append([]string(nil), r.managedPACServices...),
-	}
-}
-
-func (r *activeRuntime) beginManagedPACRefresh(url string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.attemptedPACURL = url
-}
-
-func (r *activeRuntime) setManagedPACURL(url string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.managedPACURL = url
-	r.attemptedPACURL = ""
+	engine *gatewayruntime.Runtime
+	live   liveconfig.Config
+	pac    *managedpac.Session
+	cancel context.CancelFunc
+	done   chan error
 }
 
 func New(adapter platform.Adapter, coord *gatewaycoord.Coordinator, routerListen string) (*Facade, error) {
@@ -325,12 +297,12 @@ func (f *Facade) PlanStart() (StartPlan, error) {
 	if running {
 		return StartPlan{Kind: StartPlanAlreadyRunning}, nil
 	}
-	assessment, err := f.assessPACReplacement()
+	assessment, err := managedpac.Assess(f.adapter)
 	if err != nil {
 		return StartPlan{}, err
 	}
-	if assessment.required {
-		return StartPlan{Kind: StartPlanConsentRequired, PACReplacementConsent: assessment.detail}, nil
+	if assessment.ReplacementRequired {
+		return StartPlan{Kind: StartPlanConsentRequired, PACReplacementConsent: f.pacReplacementConsentDetail(assessment)}, nil
 	}
 	return StartPlan{Kind: StartPlanReady}, nil
 }
@@ -405,7 +377,7 @@ func (f *Facade) Status(stale bool) (StatusResult, error) {
 			DomainListPath:     state.DomainList,
 			DomainCount:        state.DomainCount,
 			CATrusted:          state.CATrusted,
-			ManagedPACServices: sortedStrings(active.managedPACServices),
+			ManagedPACServices: active.pac.Services(),
 			PendingLifecycle:   pendingLifecycleKinds(state.PendingLifecycle),
 		}
 		return result, nil
@@ -483,35 +455,21 @@ func (f *Facade) watchManagedPACLease(ctx context.Context, active *activeRuntime
 		case <-ctx.Done():
 			return
 		case nextURL := <-active.engine.PACURLUpdates():
-			scope := active.managedPACScope()
-			if err := f.requireManagedPACLease(scope); err != nil {
+			if err := active.pac.RequireLease(); err != nil {
 				f.reportFatalRuntimeError(active, err)
 				return
 			}
-			active.beginManagedPACRefresh(nextURL)
-			if err := f.adapter.RefreshPAC(nextURL, scope.Services); err != nil {
-				f.reportFatalRuntimeError(active, fmt.Errorf("managed PAC refresh failed: %w", err))
+			if err := active.pac.Refresh(nextURL); err != nil {
+				f.reportFatalRuntimeError(active, err)
 				return
 			}
-			active.setManagedPACURL(nextURL)
 		case <-ticker.C:
-			if err := f.requireManagedPACLease(active.managedPACScope()); err != nil {
+			if err := active.pac.RequireLease(); err != nil {
 				f.reportFatalRuntimeError(active, err)
 				return
 			}
 		}
 	}
-}
-
-func (f *Facade) requireManagedPACLease(scope cleanup.ManagedPACScope) error {
-	states, err := f.adapter.CurrentPACState()
-	if err != nil {
-		return fmt.Errorf("managed PAC lease inspection failed: %w", err)
-	}
-	if !managedPACLeaseHeld(states, scope) {
-		return ErrManagedPACLeaseLost
-	}
-	return nil
 }
 
 func (f *Facade) reportFatalRuntimeError(active *activeRuntime, err error) {
@@ -526,94 +484,31 @@ func (f *Facade) reportFatalRuntimeError(active *activeRuntime, err error) {
 	}
 }
 
-func managedPACLeaseHeld(states []platform.PACServiceState, scope cleanup.ManagedPACScope) bool {
-	if scope.URL == "" || len(scope.Services) == 0 {
-		return false
-	}
-	managed := stringSet(scope.Services)
-	for _, state := range states {
-		if _, ok := managed[state.Name]; !ok {
-			continue
-		}
-		if !state.Enabled || state.URL != scope.URL {
-			return false
-		}
-	}
-	return true
-}
-
-type pacReplacementAssessment struct {
-	detail     *PACReplacementConsentDetail
-	serviceSet []string
-	required   bool
-}
-
-func (f *Facade) assessPACReplacement() (pacReplacementAssessment, error) {
-	states, err := f.adapter.CurrentPACState()
-	if err != nil {
-		return pacReplacementAssessment{}, err
-	}
-	managedStates := managedPACServiceStates(states)
-	serviceSet := make([]string, 0, len(managedStates))
-	needsPACConsent := false
-	for _, state := range managedStates {
-		serviceSet = append(serviceSet, state.ServiceName)
-		if state.Ownership == PACOwnershipForeign {
-			needsPACConsent = true
-		}
-	}
-	sort.Strings(serviceSet)
-	if !needsPACConsent {
-		return pacReplacementAssessment{serviceSet: serviceSet}, nil
-	}
-	return pacReplacementAssessment{
-		detail: &PACReplacementConsentDetail{
-			CurrentPACState: managedStates,
-			CleanupMode:     CleanupModeNoPACRestoration,
-		},
-		serviceSet: serviceSet,
-		required:   true,
-	}, nil
-}
-
-func managedPACServiceStates(states []platform.PACServiceState) []ManagedPACServiceState {
-	out := make([]ManagedPACServiceState, 0, len(states))
-	for _, state := range states {
+func (f *Facade) pacReplacementConsentDetail(assessment managedpac.Assessment) *PACReplacementConsentDetail {
+	out := make([]ManagedPACServiceState, 0, len(assessment.States))
+	for _, state := range assessment.States {
 		out = append(out, ManagedPACServiceState{
-			ServiceName: state.Name,
+			ServiceName: state.ServiceName,
 			Enabled:     state.Enabled,
 			URL:         state.URL,
-			Ownership:   pacOwnership(state.URL),
+			Ownership:   pacOwnership(state.Ownership),
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].ServiceName < out[j].ServiceName
-	})
-	return out
+	return &PACReplacementConsentDetail{
+		CurrentPACState: out,
+		CleanupMode:     CleanupModeNoPACRestoration,
+	}
 }
 
-func pacOwnership(raw string) PACOwnership {
-	if raw == "" || raw == "(null)" {
+func pacOwnership(ownership managedpac.Ownership) PACOwnership {
+	switch ownership {
+	case managedpac.OwnershipEmpty:
 		return PACOwnershipEmpty
-	}
-	if platform.IsManagedPACFootprint(raw) {
+	case managedpac.OwnershipOwned:
 		return PACOwnershipOwned
+	default:
+		return PACOwnershipForeign
 	}
-	return PACOwnershipForeign
-}
-
-func stringSet(values []string) map[string]struct{} {
-	set := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		set[value] = struct{}{}
-	}
-	return set
-}
-
-func sortedStrings(values []string) []string {
-	out := append([]string(nil), values...)
-	sort.Strings(out)
-	return out
 }
 
 func cleanupFailures(err error) []CleanupFailureDetail {

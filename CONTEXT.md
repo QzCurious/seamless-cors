@@ -284,6 +284,10 @@ _Avoid_: managed PAC footprint, run-specific PAC identity, port-based ownership,
 The network services selected during Gateway Activation for PAC Routing installation, PAC refresh, and Managed PAC Lease checks throughout that Gateway Owner run.
 _Avoid_: live service discovery for refresh, current service list, implicit service expansion, plan-time service lock
 
+**Managed PAC Session**:
+A Gateway Activation-scoped behavior that installs PAC Routing for the Managed PAC Service Set, tracks the current PAC URL Version and attempted PAC URL Version during refresh, and evaluates Managed PAC Lease while the Gateway Owner is live. It does not remove PAC state; Gateway Footprint Cleanup remains responsible for marker-based PAC removal.
+_Avoid_: runtime PAC state, PAC helper, cleanup owner, platform PAC wrapper, implicit refresh state
+
 **Managed PAC Lease**:
 A running Gateway Owner's ownership rule that treats the installed seamless-cors Managed PAC URL as live state for visible services in the Managed PAC Service Set, shutting down only when supported platform inspection shows that visible managed PAC state was disabled or replaced outside the gateway.
 _Avoid_: forced PAC restoration, foreign PAC cleanup, silent proxy escape, best-effort PAC ownership, missing-service failure

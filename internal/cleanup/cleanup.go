@@ -16,7 +16,6 @@ type Inspector interface {
 
 type Cleaner interface {
 	ClearOwnedPAC() error
-	ClearPACForServices(url string, services []string) error
 }
 
 type Adapter interface {
@@ -46,35 +45,17 @@ func (i Inspection) Needed() bool {
 }
 
 func Clean(runtimeDir string, adapter Cleaner) error {
-	return clean(runtimeDir, adapter, nil, nil)
+	return clean(runtimeDir, adapter, nil)
 }
 
 func CleanOwned(runtimeDir string, adapter Cleaner, cache gatewaycoord.GatewayStateCache) error {
-	return clean(runtimeDir, adapter, &cache, nil)
+	return clean(runtimeDir, adapter, &cache)
 }
 
-type ManagedPACScope struct {
-	URL      string
-	URLs     []string
-	Services []string
-}
-
-func CleanOwnedScoped(runtimeDir string, adapter Cleaner, cache gatewaycoord.GatewayStateCache, scope ManagedPACScope) error {
-	return clean(runtimeDir, adapter, &cache, &scope)
-}
-
-func clean(runtimeDir string, adapter Cleaner, ownedCache *gatewaycoord.GatewayStateCache, pacScope *ManagedPACScope) error {
+func clean(runtimeDir string, adapter Cleaner, ownedCache *gatewaycoord.GatewayStateCache) error {
 	var errs []error
-	if pacScope != nil {
-		for _, url := range pacScope.urls() {
-			if err := adapter.ClearPACForServices(url, pacScope.Services); err != nil {
-				errs = append(errs, fmt.Errorf("managed PAC cleanup failed: %w", err))
-			}
-		}
-	} else {
-		if err := adapter.ClearOwnedPAC(); err != nil {
-			errs = append(errs, fmt.Errorf("managed PAC cleanup failed: %w", err))
-		}
+	if err := adapter.ClearOwnedPAC(); err != nil {
+		errs = append(errs, fmt.Errorf("managed PAC cleanup failed: %w", err))
 	}
 	if ownedCache != nil && len(errs) > 0 {
 		return Error{Causes: errs}
@@ -93,22 +74,6 @@ func clean(runtimeDir string, adapter Cleaner, ownedCache *gatewaycoord.GatewayS
 		return Error{Causes: errs}
 	}
 	return nil
-}
-
-func (s ManagedPACScope) urls() []string {
-	seen := map[string]struct{}{}
-	var urls []string
-	for _, url := range append([]string{s.URL}, s.URLs...) {
-		if url == "" {
-			continue
-		}
-		if _, ok := seen[url]; ok {
-			continue
-		}
-		seen[url] = struct{}{}
-		urls = append(urls, url)
-	}
-	return urls
 }
 
 type Error struct {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"seamless-cors/internal/gatewayfacade"
+	"seamless-cors/internal/managedpac"
 )
 
 func TestStartRejectsConfigurationFlags(t *testing.T) {
@@ -74,11 +74,11 @@ func TestRunPrintsManagedPACLeaseLostGuidance(t *testing.T) {
 
 	err := run([]string{"start"}, io.Discard, &stderr, commandHandlers{
 		start: func(io.Writer, io.Writer) error {
-			return gatewayfacade.ErrManagedPACLeaseLost
+			return managedpac.ErrManagedPACLeaseLost
 		},
 	})
 
-	if !errors.Is(err, gatewayfacade.ErrManagedPACLeaseLost) {
+	if !errors.Is(err, managedpac.ErrManagedPACLeaseLost) {
 		t.Fatalf("run error = %v", err)
 	}
 	got := stderr.String()

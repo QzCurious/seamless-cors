@@ -26,10 +26,6 @@ func (f *fakeAdapter) ClearOwnedPAC() error {
 	f.cleared++
 	return f.clearErr
 }
-func (f *fakeAdapter) ClearPACForServices(string, []string) error {
-	f.cleared++
-	return f.clearErr
-}
 
 func TestInspectReportsOwnershipMarkersWithoutMutating(t *testing.T) {
 	runtimeDir := t.TempDir()

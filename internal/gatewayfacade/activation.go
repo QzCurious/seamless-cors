@@ -8,6 +8,7 @@ import (
 	"seamless-cors/internal/cleanup"
 	"seamless-cors/internal/config"
 	"seamless-cors/internal/gatewayruntime"
+	"seamless-cors/internal/managedpac"
 	"seamless-cors/internal/platform"
 	"seamless-cors/internal/userca"
 )
@@ -17,18 +18,15 @@ type gatewayActivation struct {
 }
 
 func (a gatewayActivation) Start(ctx context.Context, request StartRequest) (StartResult, error) {
-	assessment, err := a.facade.assessPACReplacement()
+	assessment, err := managedpac.Assess(a.facade.adapter)
 	if err != nil {
 		return StartResult{}, err
 	}
-	if assessment.required && (request.PACReplacementConsent == nil || !request.PACReplacementConsent.Accepted) {
+	if assessment.ReplacementRequired && (request.PACReplacementConsent == nil || !request.PACReplacementConsent.Accepted) {
 		return StartResult{
 			Kind:                  StartResultConsentRequired,
-			PACReplacementConsent: assessment.detail,
+			PACReplacementConsent: a.facade.pacReplacementConsentDetail(assessment),
 		}, nil
-	}
-	if len(assessment.serviceSet) == 0 {
-		return StartResult{}, fmt.Errorf("managed PAC service set is empty")
 	}
 
 	installedCAChanged := false
@@ -69,28 +67,19 @@ func (a gatewayActivation) Start(ctx context.Context, request StartRequest) (Sta
 	}
 
 	pacURL := engine.PACURL()
-	managedServices, err := a.facade.adapter.InstallPAC(pacURL, assessment.serviceSet)
+	session, pacStart, err := managedpac.Start(a.facade.adapter, assessment.ServiceSet, pacURL)
 	if err != nil {
 		return StartResult{}, errors.Join(err, a.cleanupFailedPACInstall())
 	}
-	if len(managedServices) == 0 {
-		return StartResult{}, errors.Join(
-			fmt.Errorf("managed PAC install updated no services"),
-			a.cleanupFailedPACInstall(),
-		)
-	}
-	managedServices = sortedStrings(managedServices)
-	managedServiceSet := sortedStrings(assessment.serviceSet)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	active := &activeRuntime{
-		engine:             engine,
-		live:               live,
-		cancel:             cancel,
-		done:               done,
-		managedPACURL:      pacURL,
-		managedPACServices: managedServiceSet,
+		engine: engine,
+		live:   live,
+		pac:    session,
+		cancel: cancel,
+		done:   done,
 	}
 	a.facade.mu.Lock()
 	a.facade.runtime = active
@@ -115,7 +104,7 @@ func (a gatewayActivation) Start(ctx context.Context, request StartRequest) (Sta
 			ConfigPath:         live.ConfigPath(),
 			DomainListPath:     live.DomainListPath(),
 			ManagedPACActive:   true,
-			ManagedPACServices: managedServices,
+			ManagedPACServices: pacStart.InstalledServices,
 			CATrusted:          live.CATrusted(),
 			InstalledCAChanged: installedCAChanged,
 		},

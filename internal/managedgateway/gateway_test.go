@@ -17,28 +17,27 @@ import (
 	"seamless-cors/internal/config"
 	"seamless-cors/internal/gatewaycoord"
 	"seamless-cors/internal/gatewayfacade"
+	"seamless-cors/internal/managedpac"
 	"seamless-cors/internal/platform"
 	"seamless-cors/internal/userca"
 )
 
 type fakeAdapter struct {
-	installedPAC          string
-	pacStates             []platform.PACServiceState
-	clearedPAC            int
-	trusted               int
-	cleanedCA             int
-	caRecords             []platform.CARecord
-	trustErr              error
-	installErr            error
-	installFailAfter      int
-	clearErr              error
-	refreshErr            error
-	refreshFailAfter      int
-	refreshedPAC          []string
-	clearedPACForServices []string
-	scopedPACClears       int
-	trustStarted          chan struct{}
-	releaseTrust          chan struct{}
+	installedPAC     string
+	pacStates        []platform.PACServiceState
+	clearedPAC       int
+	trusted          int
+	cleanedCA        int
+	caRecords        []platform.CARecord
+	trustErr         error
+	installErr       error
+	installFailAfter int
+	clearErr         error
+	refreshErr       error
+	refreshFailAfter int
+	refreshedPAC     []string
+	trustStarted     chan struct{}
+	releaseTrust     chan struct{}
 }
 
 func (f *fakeAdapter) Capabilities() platform.CapabilityReport {
@@ -106,23 +105,6 @@ func (f *fakeAdapter) ClearOwnedPAC() error {
 		if f.pacStates[idx].Enabled && platform.IsManagedPACFootprint(f.pacStates[idx].URL) {
 			f.pacStates[idx].Enabled = false
 		}
-	}
-	return f.clearErr
-}
-func (f *fakeAdapter) ClearPACForServices(url string, services []string) error {
-	f.clearedPACForServices = append([]string(nil), services...)
-	serviceSet := map[string]struct{}{}
-	for _, service := range services {
-		serviceSet[service] = struct{}{}
-	}
-	for idx := range f.pacStates {
-		if _, ok := serviceSet[f.pacStates[idx].Name]; ok && f.pacStates[idx].URL == url && f.pacStates[idx].Enabled {
-			f.scopedPACClears++
-			f.pacStates[idx].Enabled = false
-		}
-	}
-	if f.clearErr != nil {
-		f.clearedPAC++
 	}
 	return f.clearErr
 }
@@ -495,7 +477,7 @@ func TestManagedGatewayLeaseChecksSelectedServiceAfterReappearance(t *testing.T)
 	})
 	select {
 	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "managed PAC lease lost") {
+		if !errors.Is(err, managedpac.ErrManagedPACLeaseLost) {
 			t.Fatalf("serve error = %v", err)
 		}
 	case <-time.After(2 * time.Second):
@@ -955,7 +937,7 @@ func TestManagedGatewayStopsWhenManagedPACLeaseIsLostAndPreservesUserPAC(t *test
 
 	select {
 	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "managed PAC lease lost") {
+		if !errors.Is(err, managedpac.ErrManagedPACLeaseLost) {
 			t.Fatalf("serve error = %v", err)
 		}
 	case <-time.After(2 * time.Second):

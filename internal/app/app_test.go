@@ -53,10 +53,6 @@ func (f *fakeAdapter) ClearOwnedPAC() error {
 	f.clearedPAC++
 	return nil
 }
-func (f *fakeAdapter) ClearPACForServices(string, []string) error {
-	f.clearedPAC++
-	return nil
-}
 func (f *fakeAdapter) TrustedCAs() ([]platform.CARecord, error) {
 	return append([]platform.CARecord(nil), f.caRecords...), nil
 }
