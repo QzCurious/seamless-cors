@@ -76,7 +76,13 @@ func TestDarwinOperationsWrapRunnerFailures(t *testing.T) {
 	services := testDarwinServices(runner)
 	service := testDarwinService(services, "Vanished VPN")
 
-	if _, err := service.PAC(context.Background()); !errors.Is(err, runnerErr) || !strings.Contains(err.Error(), "get PAC setting") {
+	var listErr ListError
+	if _, err := services.list(context.Background()); !errors.As(err, &listErr) || !errors.Is(err, runnerErr) {
+		t.Fatalf("list error = %v", err)
+	}
+
+	var pacErr PACError
+	if _, err := service.PAC(context.Background()); !errors.Is(err, runnerErr) || !errors.As(err, &pacErr) || pacErr.ServiceName != "Vanished VPN" || !strings.Contains(err.Error(), "get PAC setting") {
 		t.Fatalf("observation error = %v", err)
 	}
 	if err := service.SetPAC(context.Background(), "http://127.0.0.1/p.pac"); !errors.Is(err, runnerErr) || !strings.Contains(err.Error(), "set PAC URL") {

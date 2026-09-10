@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/QzCurious/seamless-cors/internal/systempac"
@@ -9,11 +10,13 @@ import (
 
 func cleanGatewayFootprint(ctx context.Context, pac systempac.Module, coord *coordinator, ownedCache *stateCache) (SystemPACReport, []CleanupFailure) {
 	var failures []CleanupFailure
-	services, err := pac.Cleanup(ctx)
+	cleanupErr := pac.Cleanup(ctx)
+	observation, inspectionErr := pac.Inspect(ctx)
+	err := errors.Join(cleanupErr, inspectionErr)
 	if err != nil {
 		failures = append(failures, CleanupFailure{Subject: CleanupSubjectSystemPAC, Diagnostic: err.Error()})
 	}
-	return cleanupSystemPACReport(services, err), append(failures, cleanGatewayStateCache(coord, ownedCache)...)
+	return systemPACReport(observation, "", err), append(failures, cleanGatewayStateCache(coord, ownedCache)...)
 }
 
 func cleanGatewayStateCache(coord *coordinator, ownedCache *stateCache) []CleanupFailure {
@@ -40,7 +43,7 @@ func inspectGatewayFootprint(coord *coordinator, stale bool, ownerCache stateCac
 		pacState = CleanupStatusUnknown
 	}
 	for _, service := range pac.Services {
-		if service.Enabled && service.Ownership == SystemPACOwnershipOwned {
+		if service.Enabled != nil && *service.Enabled && service.Owned {
 			pacState = CleanupStatusNeeded
 			break
 		}

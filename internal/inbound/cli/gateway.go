@@ -318,15 +318,21 @@ func renderStartResult(stdout io.Writer, result gateway.StartResult) {
 }
 
 func renderSystemPACReport(stdout io.Writer, label string, report gateway.SystemPACReport) {
-	if report.Generation > 0 {
-		fmt.Fprintf(stdout, "%s-generation: %d\n", label, report.Generation)
-	}
 	for _, service := range report.Services {
-		fmt.Fprintf(stdout, "%s-service: %s: %s", label, service.Name, service.Ownership)
-		if service.Enabled {
+		manageability := "not manageable"
+		if service.Manageable {
+			manageability = "manageable"
+		}
+		fmt.Fprintf(stdout, "%s-service: %s: %s", label, service.Name, manageability)
+		if service.Enabled == nil {
+			fmt.Fprint(stdout, ": unobserved")
+		} else if *service.Enabled {
 			fmt.Fprint(stdout, ": enabled")
 		} else {
 			fmt.Fprint(stdout, ": disabled")
+		}
+		if service.URL != "" {
+			fmt.Fprintf(stdout, ": %s", service.URL)
 		}
 		fmt.Fprintln(stdout)
 	}

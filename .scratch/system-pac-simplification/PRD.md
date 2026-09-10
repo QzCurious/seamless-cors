@@ -27,7 +27,7 @@ The change is a clean break. It should delete obsolete types and behavior rather
 ```go
 type Module interface {
 	Deliver(context.Context, Endpoint) (State, error)
-	Observe(context.Context, *Endpoint) (State, error)
+	Inspect(context.Context, *Endpoint) (State, error)
 	Cleanup(context.Context) (CleanupState, error)
 }
 ```

@@ -170,24 +170,17 @@ func (r StartCleanupFailed) UpstreamListCreationWarningDetail() *UpstreamListCre
 func (StartCleanupFailed) startResult() {}
 
 type SystemPACServiceState struct {
-	Name      string             `json:"name"`
-	URL       string             `json:"url"`
-	Enabled   bool               `json:"enabled"`
-	Ownership SystemPACOwnership `json:"ownership"`
+	Name       string `json:"name"`
+	URL        string `json:"url"`
+	Enabled    *bool  `json:"enabled,omitempty"` // Nil when the setting could not be observed.
+	Manageable bool   `json:"manageable"`
+	Owned      bool   `json:"owned"`
 }
-
-type SystemPACOwnership string
-
-const (
-	SystemPACOwnershipUnknown SystemPACOwnership = "unknown"
-	SystemPACOwnershipEmpty   SystemPACOwnership = "empty"
-	SystemPACOwnershipOwned   SystemPACOwnership = "owned"
-	SystemPACOwnershipForeign SystemPACOwnership = "foreign"
-)
 
 type SystemPACIssueKind string
 
 const (
+	SystemPACIssueDelivery     SystemPACIssueKind = "delivery"
 	SystemPACIssueDiscovery    SystemPACIssueKind = "discovery"
 	SystemPACIssueObservation  SystemPACIssueKind = "observation"
 	SystemPACIssueMutation     SystemPACIssueKind = "mutation"
@@ -202,7 +195,6 @@ type SystemPACIssue struct {
 }
 
 type SystemPACReport struct {
-	Generation            uint64                  `json:"generation,omitempty"`
 	Services              []SystemPACServiceState `json:"services"`
 	RoutesCurrentEndpoint bool                    `json:"routesCurrentEndpoint"`
 	Issues                []SystemPACIssue        `json:"issues,omitempty"`
@@ -785,7 +777,9 @@ func (f *lifecycle) Stop(ctx context.Context) (StopResult, error) {
 		<-startDone
 	}
 	f.deliveryMu.Lock()
-	cleanupServices, cleanupErr := f.systemPAC.Cleanup(ctx)
+	cleanupErr := f.systemPAC.Cleanup(ctx)
+	cleanupObservation, inspectionErr := f.systemPAC.Inspect(ctx)
+	cleanupErr = errors.Join(cleanupErr, inspectionErr)
 	if cleanupErr != nil {
 		cleanupFailures = append(cleanupFailures, CleanupFailure{Subject: CleanupSubjectSystemPAC, Diagnostic: cleanupErr.Error()})
 	}
@@ -814,7 +808,7 @@ func (f *lifecycle) Stop(ctx context.Context) (StopResult, error) {
 	if len(cleanupFailures) > 0 {
 		cleanupFulfillment = CommandUnfulfilled
 	}
-	return StopResult{Kind: StopResultStopped, Warnings: warnings, CleanupFulfillment: cleanupFulfillment, SystemPACCleanup: cleanupSystemPACReport(cleanupServices, cleanupErr), CleanupFailures: cleanupFailures}, nil
+	return StopResult{Kind: StopResultStopped, Warnings: warnings, CleanupFulfillment: cleanupFulfillment, SystemPACCleanup: systemPACReport(cleanupObservation, "", cleanupErr), CleanupFailures: cleanupFailures}, nil
 }
 
 func (f *lifecycle) Status(ctx context.Context, stale bool) (StatusResult, error) {
@@ -837,8 +831,8 @@ func (f *lifecycle) Status(ctx context.Context, stale bool) (StatusResult, error
 	if active != nil {
 		endpoint = active.engine.PACListen()
 	}
-	pacState, pacErr := f.systemPAC.Observe(ctx, endpoint)
-	currentPAC := systemPACReport(pacState, pacErr)
+	pacState, pacErr := f.systemPAC.Inspect(ctx)
+	currentPAC := systemPACReport(pacState, endpoint, pacErr)
 	result := StatusResult{
 		Kind: StatusResultReported,
 		StatusReport: StatusReport{
@@ -1059,8 +1053,11 @@ func (f *lifecycle) deliverSystemPAC(ctx context.Context, active *activeRuntime)
 	if !admitted {
 		return SystemPACReport{}, false
 	}
-	state, err := f.systemPAC.Deliver(ctx, active.engine.PACListen())
-	report := systemPACReport(state, err)
+	endpoint := active.engine.PACListen()
+	deliveryErr := f.systemPAC.Deliver(ctx, endpoint)
+	observation, inspectionErr := f.systemPAC.Inspect(ctx)
+	err := errors.Join(deliveryErr, inspectionErr)
+	report := systemPACReport(observation, endpoint, err)
 	f.mu.Lock()
 	if f.runtime == active && !f.ownerEnding {
 		active.latestPACDelivery = &report

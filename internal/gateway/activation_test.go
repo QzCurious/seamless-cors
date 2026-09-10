@@ -20,8 +20,8 @@ func TestExecuteStartComposesTrafficAndDeliversPAC(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := &lifecycleTestSystemSettings{
-		services:     []systemPACTestService{{ServiceName: "Wi-Fi", Ownership: systempac.OwnershipEmpty}},
-		routingReady: true,
+		services:      []systemPACTestService{{ServiceName: "Wi-Fi", Observed: true}},
+		deliverRoutes: true,
 	}
 	lifecycle, err := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
 	if err != nil {
@@ -46,7 +46,7 @@ func TestExecuteStartComposesTrafficAndDeliversPAC(t *testing.T) {
 		t.Fatalf("unexpected HTTPS outcomes = %#v", started.Guidance.Traffic)
 	}
 
-	settings.routingReady = false
+	settings.services[0].Enabled = false
 	status, err := lifecycle.Status(context.Background(), false)
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +124,7 @@ func TestExecuteStartLoadsGlobalAndDirectoryUpstreamLists(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workingDirectory, "upstreams.txt"), []byte("shared.example.test\ndirectory.example.test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	settings := &lifecycleTestSystemSettings{services: []systemPACTestService{{ServiceName: "Wi-Fi", Ownership: systempac.OwnershipEmpty}}}
+	settings := &lifecycleTestSystemSettings{services: []systemPACTestService{{ServiceName: "Wi-Fi", Observed: true}}}
 	lifecycle, err := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
 	if err != nil {
 		t.Fatal(err)
@@ -153,8 +153,8 @@ func TestStartReportsBlockedHTTPSAndAssessmentIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := &lifecycleTestSystemSettings{
-		services:     []systemPACTestService{{ServiceName: "Wi-Fi", Ownership: systempac.OwnershipEmpty}},
-		routingReady: true,
+		services:      []systemPACTestService{{ServiceName: "Wi-Fi", Observed: true}},
+		deliverRoutes: true,
 	}
 	ca := &fakeUserCA{inspectErr: errors.New("trust store unavailable")}
 	lifecycle, err := newLifecycle(settings, ca, newCoordinator(t.TempDir()), "")
@@ -343,49 +343,54 @@ func (emptyTestUserCA) Uninstall(context.Context) error              { return ni
 type lifecycleTestSystemSettings struct {
 	services       []systemPACTestService
 	applied        int
-	setResult      *systempac.State
 	setErr         error
 	stateErr       error
 	clearErr       error
 	cleared        int
 	cleanupCalls   int
 	uninstallCalls int
-	cleanupResult  []systempac.ServiceState
-	routingReady   bool
+	deliverRoutes  bool
 }
 
 type systemPACTestService struct {
 	ServiceName      string
 	URL              string
 	Enabled          bool
-	Ownership        systempac.Ownership
+	Observed         bool
 	ObservationIssue string
 }
 
-func (f *lifecycleTestSystemSettings) Deliver(_ context.Context, _ string) (systempac.State, error) {
+func (f *lifecycleTestSystemSettings) Deliver(_ context.Context, endpoint string) error {
 	f.applied++
-	if f.setResult != nil {
-		return *f.setResult, f.setErr
+	if f.deliverRoutes {
+		for i := range f.services {
+			f.services[i].URL = "http://" + endpoint + "/seamless-cors.pac?v=1"
+			f.services[i].Enabled = true
+		}
 	}
-	return f.state(), f.setErr
+	return f.setErr
 }
 
-func (f *lifecycleTestSystemSettings) Observe(context.Context, string) (systempac.State, error) {
+func (f *lifecycleTestSystemSettings) Inspect(context.Context) (systempac.Observation, error) {
 	return f.state(), f.stateErr
 }
 
-func (f *lifecycleTestSystemSettings) state() systempac.State {
-	state := systempac.State{RoutesCurrentEndpoint: f.routingReady}
+func (f *lifecycleTestSystemSettings) state() systempac.Observation {
+	state := systempac.Observation{}
 	for _, service := range f.services {
-		state.Services = append(state.Services, systempac.ServiceState{Name: service.ServiceName, URL: service.URL, Enabled: service.Enabled, Ownership: service.Ownership})
+		var setting *systempac.PACState
+		if service.Observed {
+			setting = &systempac.PACState{URL: service.URL, Enabled: service.Enabled}
+		}
+		state.Services = append(state.Services, systempac.ServiceObservation{Name: service.ServiceName, State: setting})
 	}
 	return state
 }
 
-func (f *lifecycleTestSystemSettings) Cleanup(context.Context) ([]systempac.ServiceState, error) {
+func (f *lifecycleTestSystemSettings) Cleanup(context.Context) error {
 	f.cleared++
 	f.cleanupCalls++
-	return f.cleanupResult, f.clearErr
+	return f.clearErr
 }
 
 func executeAcceptedStart(t *testing.T, lifecycle *lifecycle) (StartResult, error) {

@@ -56,7 +56,7 @@ if ($null -ne $prop -and $null -ne $prop.AutoConfigURL) {
 `, psQuote(windowsInternetSettingsKey))
 	out, err := s.owner.runner.run(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
 	if err != nil {
-		return PACSetting{}, fmt.Errorf("get PAC setting for network service %q: %w", s.name, err)
+		return PACSetting{}, PACError{ServiceName: s.name, Cause: err}
 	}
 
 	// Translate PowerShell's JSON into the domain snapshot.

@@ -25,34 +25,34 @@ type quiescingPAC struct {
 	deliverCalls   int
 }
 
-func (f *quiescingPAC) Deliver(context.Context, string) (systempac.State, error) {
+func (f *quiescingPAC) Deliver(context.Context, string) error {
 	f.deliverCalls++
 	close(f.deliverEntered)
 	<-f.releaseDeliver
-	return systempac.State{}, nil
+	return nil
 }
-func (f *quiescingPAC) Observe(context.Context, string) (systempac.State, error) {
-	return systempac.State{}, nil
+func (f *quiescingPAC) Inspect(context.Context) (systempac.Observation, error) {
+	return systempac.Observation{}, nil
 }
-func (f *quiescingPAC) Cleanup(context.Context) ([]systempac.ServiceState, error) {
+func (f *quiescingPAC) Cleanup(context.Context) error {
 	close(f.cleanupEntered)
-	return nil, nil
+	return nil
 }
 
-func (f *cleanupProbePAC) Deliver(context.Context, string) (systempac.State, error) {
-	return systempac.State{}, nil
+func (f *cleanupProbePAC) Deliver(context.Context, string) error {
+	return nil
 }
-func (f *cleanupProbePAC) Observe(context.Context, string) (systempac.State, error) {
-	return systempac.State{}, nil
+func (f *cleanupProbePAC) Inspect(context.Context) (systempac.Observation, error) {
+	return systempac.Observation{}, nil
 }
-func (f *cleanupProbePAC) Cleanup(context.Context) ([]systempac.ServiceState, error) {
+func (f *cleanupProbePAC) Cleanup(context.Context) error {
 	f.cleanupCalls++
 	conn, err := net.DialTimeout("tcp", f.endpoint, time.Second)
 	if err == nil {
 		f.reachableDuringCleanup = true
 		_ = conn.Close()
 	}
-	return nil, f.err
+	return f.err
 }
 
 func TestStopCleansSystemPACWhileRuntimeServesAndRemainsFulfilledOnFailure(t *testing.T) {

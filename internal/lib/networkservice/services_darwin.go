@@ -27,7 +27,7 @@ func List(ctx context.Context) ([]Service, error) {
 func (s *services) list(ctx context.Context) ([]Service, error) {
 	out, err := s.runner.run(ctx, "networksetup", "-listallnetworkservices")
 	if err != nil {
-		return nil, fmt.Errorf("list network services: %w", err)
+		return nil, ListError{Cause: err}
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	services := make([]Service, 0, len(lines)-1)
@@ -49,7 +49,7 @@ func (s *service) PAC(ctx context.Context) (PACSetting, error) {
 	// Read the operating system's current state.
 	out, err := s.owner.runner.run(ctx, "networksetup", "-getautoproxyurl", s.name)
 	if err != nil {
-		return PACSetting{}, fmt.Errorf("get PAC setting for network service %q: %w", s.name, err)
+		return PACSetting{}, PACError{ServiceName: s.name, Cause: err}
 	}
 
 	// Translate networksetup's text format into the domain snapshot.

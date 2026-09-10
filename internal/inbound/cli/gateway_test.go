@@ -37,14 +37,14 @@ func TestSecondForegroundSignalForcesExit(t *testing.T) {
 func TestStartRendersEverySystemPACServiceAndDeliveryIssue(t *testing.T) {
 	var out bytes.Buffer
 	renderStartResult(&out, gateway.Started{Guidance: gateway.StartGuidance{SystemPAC: gateway.SystemPACReport{
-		Generation: 7,
 		Services: []gateway.SystemPACServiceState{
-			{Name: "Ethernet", Ownership: "owned", Enabled: true},
-			{Name: "Wi-Fi", Ownership: "foreign", Enabled: true},
+			{Name: "Ethernet", Manageable: true, Owned: true, Enabled: new(true)},
+			{Name: "Wi-Fi", Manageable: false, Enabled: new(true), URL: "http://corp/pac"},
+			{Name: "VPN"},
 		},
 		Issues: []gateway.SystemPACIssue{{Kind: gateway.SystemPACIssueMutation, ServiceName: "Ethernet", Cause: "write denied"}},
 	}}})
-	for _, want := range []string{"system-pac-delivery-generation: 7", "Ethernet: owned: enabled", "Wi-Fi: foreign: enabled", "mutation: Ethernet: write denied"} {
+	for _, want := range []string{"Ethernet: manageable: enabled", "Wi-Fi: not manageable: enabled: http://corp/pac", "VPN: not manageable: unobserved", "mutation: Ethernet: write denied"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, out.String())
 		}
@@ -70,11 +70,11 @@ func TestStopCleanupUncertaintyIsProminentButSuccessful(t *testing.T) {
 
 func TestStatusLabelsFreshAndHistoricalSystemPACReports(t *testing.T) {
 	var out bytes.Buffer
-	historical := gateway.SystemPACReport{Generation: 3, Issues: []gateway.SystemPACIssue{{Kind: gateway.SystemPACIssueMutation, Cause: "old failure"}}}
+	historical := gateway.SystemPACReport{Issues: []gateway.SystemPACIssue{{Kind: gateway.SystemPACIssueMutation, Cause: "old failure"}}}
 	renderStatus(&out, gateway.StatusResult{StatusReport: gateway.StatusReport{State: gateway.GatewayStatusRunning, Runtime: &gateway.RuntimeStatusDetail{
 		LatestSystemPACDelivery: &historical,
-	}, SystemPAC: gateway.SystemPACReport{Services: []gateway.SystemPACServiceState{{Name: "Wi-Fi", Ownership: "owned", Enabled: true}}}, InstalledCA: gateway.InstalledCAStatusDetail{Health: gateway.CAHealthUsable}}})
-	for _, want := range []string{"system-pac-current-service", "system-pac-historical-delivery-generation: 3", "old failure"} {
+	}, SystemPAC: gateway.SystemPACReport{Services: []gateway.SystemPACServiceState{{Name: "Wi-Fi", Manageable: true, Owned: true, Enabled: new(true)}}}, InstalledCA: gateway.InstalledCAStatusDetail{Health: gateway.CAHealthUsable}}})
+	for _, want := range []string{"system-pac-current-service", "system-pac-historical-delivery-issue", "old failure"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, out.String())
 		}

@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/QzCurious/seamless-cors/internal/systempac"
 )
 
 func TestStopWithoutOwnerReturnsNotRunningAndRemovesStaleCache(t *testing.T) {
@@ -17,7 +15,7 @@ func TestStopWithoutOwnerReturnsNotRunningAndRemovesStaleCache(t *testing.T) {
 	}
 	settings := &lifecycleTestSystemSettings{
 		services: []systemPACTestService{{
-			ServiceName: "Wi-Fi", URL: "http://127.0.0.1:8079/seamless-cors.pac", Enabled: true, Ownership: systempac.OwnershipOwned,
+			ServiceName: "Wi-Fi", URL: "http://127.0.0.1:8079/seamless-cors.pac", Enabled: true, Observed: true,
 		}},
 	}
 
@@ -130,8 +128,8 @@ func TestOwnerlessStatusReportsOwnershipTransitionInsteadOfInspectingUnlocked(t 
 func TestOwnerlessStatusReportsEveryVisibleNetworkService(t *testing.T) {
 	useTestGatewayEnvironment(t)
 	settings := &lifecycleTestSystemSettings{services: []systemPACTestService{
-		{ServiceName: "Wi-Fi", Ownership: systempac.OwnershipEmpty},
-		{ServiceName: "Corporate VPN", URL: "http://corp/pac", Enabled: true, Ownership: systempac.OwnershipForeign},
+		{ServiceName: "Wi-Fi", Observed: true},
+		{ServiceName: "Corporate VPN", URL: "http://corp/pac", Enabled: true, Observed: true},
 	}}
 	result, err := status(context.Background(), settings, &fakeUserCA{})
 	if err != nil {
@@ -150,7 +148,7 @@ func TestStopWithoutOwnerPreservesResultWhenCleanupFails(t *testing.T) {
 	settings := &lifecycleTestSystemSettings{
 		clearErr: errors.New("pac denied"),
 		services: []systemPACTestService{{
-			ServiceName: "Wi-Fi", URL: "http://127.0.0.1:8079/seamless-cors.pac", Enabled: true, Ownership: systempac.OwnershipOwned,
+			ServiceName: "Wi-Fi", URL: "http://127.0.0.1:8079/seamless-cors.pac", Enabled: true, Observed: true,
 		}},
 	}
 

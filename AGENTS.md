@@ -22,6 +22,18 @@ The project is still in development, we prefer a clean break over adding fallbac
 
 Preallocate when obvious; reuse when ownership makes it natural; optimize aggressively only when performance actually matters.
 
+Prefer derived state over synchronized redundant state.
+
+Prefer organizing a sequential operation into inline phases separated by short,
+intent-focused comments before extracting helper functions. Extract a helper when
+it provides reuse or encapsulates a distinct responsibility that is easier to
+understand independently.
+
+Prefer constructing structs in their final form with a complete literal on each
+return path when the fields are already known. Use incremental construction when
+the algorithm naturally accumulates state. Error paths may return partial results
+when those results carry useful information for callers.
+
 ## Ownership conventions
 
 Do not defensively copy slices, maps, or pointers across internal boundaries

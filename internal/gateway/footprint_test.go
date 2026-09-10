@@ -13,7 +13,7 @@ func TestCleanupStatusPreservesSystemPACUncertaintyBesideNeededCache(t *testing.
 
 func TestCleanupStatusTreatsDisabledOwnedPACAsClean(t *testing.T) {
 	coord := newCoordinator(t.TempDir())
-	report := SystemPACReport{Services: []SystemPACServiceState{{Name: "Wi-Fi", Ownership: "owned", Enabled: false}}}
+	report := SystemPACReport{Services: []SystemPACServiceState{{Name: "Wi-Fi", Owned: true, Manageable: true, Enabled: new(false)}}}
 	status := inspectGatewayFootprint(coord, false, stateCache{}, report)
 	if status.State != CleanupStatusNone {
 		t.Fatalf("status = %#v", status)

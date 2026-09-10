@@ -412,6 +412,10 @@ _Avoid_: viable service, PAC setting, successfully observed service
 The current PAC URL and enabled state observed as properties of one visible Network Service. A failed observation leaves the Network Service visible but does not establish manageable PAC state.
 _Avoid_: service discovery, missing service, assumed-empty PAC state
 
+**Manageable PAC Setting**:
+A successfully observed PAC setting whose URL is empty or bears the System PAC Ownership Marker, whether enabled or disabled, and is therefore eligible for System PAC Delivery. Manageability describes the setting at the time of observation, not lasting ownership of its Network Service; foreign settings and failed observations are not manageable.
+_Avoid_: selected service, fixed managed service set, empty means owned, failed means foreign, permanent manageability
+
 **System PAC**:
 The module that integrates seamless-cors with current-user operating-system PAC settings while hiding platform discovery, ownership classification, safe mutation, publication identity, serialization, reporting, and verified cleanup from Gateway.
 _Avoid_: activation-scoped PAC manager, PAC generator, Gateway-owned PAC policy, Network Service adapter
@@ -421,7 +425,7 @@ The stable loopback HTTP PAC URL shape whose path ends in `seamless-cors.pac`, p
 _Avoid_: activation-scoped PAC footprint, run-specific PAC identity, port-based ownership, full-URL ownership, non-loopback PAC ownership
 
 **System PAC Delivery**:
-One synchronous best-effort attempt to give every currently visible Network Service with an empty or marker-owned PAC setting a newly versioned URL for the current PAC Endpoint. Every request produces its own serialized attempt and publication generation; each attempt observes before writing, freshly verifies its result, treats foreign settings as ordinary excluded state, never rolls back successful services, and performs no background retry.
+One synchronous best-effort attempt to give every currently visible Network Service with an empty or marker-owned PAC setting a newly versioned URL for the current PAC Endpoint. Success means at least one setting was eligible and every eligible setting was verified with the intended publication URL enabled, with no discovery, observation, mutation, or verification errors; partial failure preserves successful changes and never triggers background retry.
 _Avoid_: fixed service set, activation assessment, control lifetime, request conflation, all-or-nothing rollout, foreign PAC replacement, background reconciliation
 
 **System PAC Delivery Request**:
@@ -429,11 +433,11 @@ A Gateway-owned trigger emitted by initial start, each effective Traffic Project
 _Avoid_: conflated request, arbitrary queue capacity, background retry, System PAC-owned queue, Traffic Projection publication
 
 **System PAC Observation**:
-A fresh read-only discovery and PAC Setting Observation of every currently visible Network Service. The caller may supply a current PAC Endpoint; when it does, System PAC additionally establishes whether any enabled marker-owned setting identifies that endpoint. Observation remains available without a live endpoint.
+Fresh read-only facts about every currently visible Network Service, collected over an observation interval rather than an atomic snapshot. System PAC can establish whether those observed settings route a supplied PAC Endpoint, and observation remains available without a live endpoint.
 _Avoid_: cached control state, PAC mutation, fixed service snapshot, delivery retry
 
 **System PAC Report**:
-A Gateway-owned surface-neutral classification built from System PAC-owned facts and concrete errors, containing every visible Network Service's available facts, service-identified issues, and whether at least one freshly verified service routes through the current PAC Endpoint. A fresh observation report is current OS truth, while Gateway Runtime may retain exactly one latest delivery report as explicitly historical diagnostics.
+A Gateway-owned surface-neutral classification built from System PAC-owned facts and concrete errors, containing every visible Network Service's available facts, service-identified issues, and whether at least one freshly verified service routes through the current PAC Endpoint. Reports obtain settings through a separate System PAC Observation; Gateway Runtime may retain exactly one latest delivery report combining delivery errors and subsequent observation as explicitly historical diagnostics.
 _Avoid_: System PAC-owned command semantics, control state, service-set report, unbounded warning history, historical failure presented as current state
 
 **System PAC Routes Current Endpoint**:

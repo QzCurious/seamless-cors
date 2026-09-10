@@ -17,22 +17,9 @@ import (
 
 // Module is the complete System PAC integration seam used by Gateway.
 type Module interface {
-	Deliver(context.Context, string) (State, error)
-	Observe(context.Context, string) (State, error)
-	Cleanup(context.Context) ([]ServiceState, error)
-}
-
-type ServiceState struct {
-	Name      string    `json:"name"`
-	URL       string    `json:"url"`
-	Enabled   bool      `json:"enabled"`
-	Ownership Ownership `json:"ownership"`
-}
-
-type State struct {
-	Generation            uint64         `json:"generation,omitempty"`
-	Services              []ServiceState `json:"services"`
-	RoutesCurrentEndpoint bool           `json:"routesCurrentEndpoint"`
+	Deliver(context.Context, string) error
+	Inspect(context.Context) (Observation, error)
+	Cleanup(context.Context) error
 }
 
 type SystemPAC struct {
@@ -45,9 +32,18 @@ func New() *SystemPAC { return &SystemPAC{listServices: networkservice.List} }
 
 var _ Module = (*SystemPAC)(nil)
 
-func (m *SystemPAC) Deliver(ctx context.Context, endpoint string) (State, error) {
+// Observation contains facts from fresh platform reads, not an atomic or live snapshot.
+type Observation struct {
+	Services []ServiceObservation `json:"services"`
+}
+
+// Deliver publishes a fresh version for endpoint (host:port). Success requires at least
+// one eligible service and every eligible setting verified enabled with that URL.
+// Foreign settings are preserved; any discovery, read, write, or verification error
+// is returned without rolling back successful writes.
+func (m *SystemPAC) Deliver(ctx context.Context, endpoint string) error {
 	if endpoint == "" {
-		return State{}, fmt.Errorf("System PAC endpoint is empty")
+		return fmt.Errorf("System PAC endpoint is empty")
 	}
 
 	// Valid delivery attempts consume a generation and hold serialization through
@@ -55,128 +51,164 @@ func (m *SystemPAC) Deliver(ctx context.Context, endpoint string) (State, error)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Discover current services and observe which settings we may replace.
+	services, discoveryErr := m.listServices(ctx)
+	before, observationErrs := observeServices(ctx, services)
+
+	// Publish a fresh generation to empty or owned settings, continuing on failure.
 	m.generation++
-	state := State{Generation: m.generation}
-	services, err := m.discover(ctx)
-	var operationErrs []error
-	if err != nil {
-		operationErrs = append(operationErrs, err)
-	}
-	before, observationErr := observeServices(ctx, services, false)
-	if observationErr != nil {
-		operationErrs = append(operationErrs, observationErr)
-	}
 	nextURL := publicationURL(endpoint, m.generation)
+	var mutationErrs []error
+	eligible := 0
 	for i, service := range services {
-		if before[i].Ownership != OwnershipEmpty && before[i].Ownership != OwnershipOwned {
+		state := before[i].State
+		if !state.Manageable() {
 			continue
 		}
+		eligible++
 		if err := service.SetPAC(ctx, nextURL); err != nil {
-			operationErrs = append(operationErrs, MutationError{ServiceName: service.Name(), Cause: err})
+			mutationErrs = append(mutationErrs, MutationError{ServiceName: service.Name(), Cause: err})
 		}
 	}
-	verified, verificationErr := observeServices(ctx, services, true)
-	state.Services = verified
-	state.RoutesCurrentEndpoint = routesEndpoint(verified, endpoint)
-	if verificationErr != nil {
-		operationErrs = append(operationErrs, verificationErr)
+
+	// Verify every eligible service has the exact publication enabled.
+	verified, verificationErrs := observeServices(ctx, services)
+	for i, service := range verified {
+		if err := verificationErrs[i]; err != nil {
+			observation := err.(ObservationError)
+			verificationErrs[i] = VerificationError{ServiceName: observation.ServiceName, Cause: observation.Cause}
+			continue
+		}
+		prior := before[i].State
+		if !prior.Manageable() {
+			continue
+		}
+		if state := service.State; state != nil && (!state.Enabled || state.URL != nextURL) {
+			verificationErrs[i] = DeliveryMismatchError{ServiceName: service.Name, PACURL: nextURL, Observed: *state}
+		}
 	}
-	return state, errors.Join(operationErrs...)
+	var deliveryErr error
+	if eligible == 0 {
+		deliveryErr = NoEligibleServicesError{}
+	}
+	return errors.Join(discoveryErr, errors.Join(observationErrs...), errors.Join(mutationErrs...), errors.Join(verificationErrs...), deliveryErr)
 }
 
-func (m *SystemPAC) Observe(ctx context.Context, endpoint string) (State, error) {
+// Inspect discovers and reads current settings without changing them.
+func (m *SystemPAC) Inspect(ctx context.Context) (Observation, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	services, err := m.discover(ctx)
-	observed, observationErr := observeServices(ctx, services, false)
-	return State{Services: observed, RoutesCurrentEndpoint: routesEndpoint(observed, endpoint)}, errors.Join(err, observationErr)
+	services, err := m.listServices(ctx)
+	observed, observationErrs := observeServices(ctx, services)
+	return Observation{Services: observed}, errors.Join(err, errors.Join(observationErrs...))
 }
 
-func (m *SystemPAC) Cleanup(ctx context.Context) ([]ServiceState, error) {
+// Cleanup disables active owned settings and verifies that none remain active.
+// It preserves foreign settings and retained URLs, and returns any uncertainty.
+func (m *SystemPAC) Cleanup(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	services, err := m.discover(ctx)
+	services, err := m.listServices(ctx)
 	var operationErrs []error
 	if err != nil {
 		operationErrs = append(operationErrs, err)
 	}
-	before, observationErr := observeServices(ctx, services, false)
-	if observationErr != nil {
-		operationErrs = append(operationErrs, observationErr)
-	}
+	before, observationErrs := observeServices(ctx, services)
+	operationErrs = append(operationErrs, observationErrs...)
 	for i, service := range services {
-		state := before[i]
-		if !state.Enabled || state.Ownership != OwnershipOwned {
+		state := before[i].State
+		if state == nil || !state.Enabled || !state.Owned() {
 			continue
 		}
 		if err := service.DisablePAC(ctx); err != nil {
 			operationErrs = append(operationErrs, MutationError{ServiceName: service.Name(), Cause: err})
 		}
 	}
-	verified, verificationErr := observeServices(ctx, services, true)
-	if verificationErr != nil {
-		operationErrs = append(operationErrs, verificationErr)
+	verified, verificationErrs := observeServices(ctx, services)
+	for i, err := range verificationErrs {
+		if err != nil {
+			observation := err.(ObservationError)
+			verificationErrs[i] = VerificationError{ServiceName: observation.ServiceName, Cause: observation.Cause}
+		}
 	}
+	operationErrs = append(operationErrs, verificationErrs...)
 	var residue []string
-	for _, state := range verified {
-		if state.Enabled && state.Ownership == OwnershipOwned {
-			residue = append(residue, state.Name)
+	for _, service := range verified {
+		state := service.State
+		if state != nil && state.Enabled && state.Owned() {
+			residue = append(residue, service.Name)
 		}
 	}
 	if len(residue) > 0 {
 		operationErrs = append(operationErrs, ResidueError{Services: residue})
 	}
 	err = errors.Join(operationErrs...)
-	return verified, err
+	return err
 }
 
-func (m *SystemPAC) discover(ctx context.Context) ([]networkservice.Service, error) {
-	services, err := m.listServices(ctx)
-	if err != nil {
-		return services, DiscoveryError{Cause: err}
-	}
-	return services, nil
-}
-
-func observeServices(ctx context.Context, services []networkservice.Service, verification bool) ([]ServiceState, error) {
-	states := make([]ServiceState, len(services))
-	var errs []error
-	for i, service := range services {
-		states[i] = ServiceState{Name: service.Name(), Ownership: OwnershipUnknown}
-		setting, err := service.PAC(ctx)
-		if err != nil {
-			if verification {
-				errs = append(errs, VerificationError{ServiceName: service.Name(), Cause: err})
-			} else {
-				errs = append(errs, ObservationError{ServiceName: service.Name(), Cause: err})
-			}
-			continue
-		}
-		states[i] = ServiceState{Name: service.Name(), URL: setting.URL, Enabled: setting.Enabled, Ownership: ownership(setting.URL)}
-	}
-	return states, errors.Join(errs...)
-}
-
-func routesEndpoint(states []ServiceState, endpoint string) bool {
+// RoutesEndpoint reports whether an enabled observed service uses this PAC endpoint.
+func (s Observation) RoutesEndpoint(endpoint string) bool {
 	if endpoint == "" {
 		return false
 	}
-	for _, state := range states {
-		if state.Enabled && state.Ownership == OwnershipOwned && servesEndpoint(state.URL, endpoint) {
+	for _, service := range s.Services {
+		state := service.State
+		if state == nil || !state.Enabled || !state.Owned() {
+			continue
+		}
+		u, err := url.Parse(strings.TrimSpace(state.URL))
+		if err == nil && u.Host == endpoint {
 			return true
 		}
 	}
 	return false
 }
 
-type Ownership string
+// ServiceObservation retains each visible service even when its PAC read fails.
+type ServiceObservation struct {
+	Name  string    `json:"name"`
+	State *PACState `json:"state,omitempty"` // Nil when the read failed.
+}
 
-const (
-	OwnershipUnknown Ownership = "unknown"
-	OwnershipEmpty   Ownership = "empty"
-	OwnershipOwned   Ownership = "owned"
-	OwnershipForeign Ownership = "foreign"
-)
+// PACState is one successfully observed PAC setting.
+type PACState struct {
+	URL     string `json:"url"`
+	Enabled bool   `json:"enabled"`
+}
+
+// Manageable reports whether this observation permits delivery. A failed read
+// has no state and never permits mutation, even though an empty URL does.
+func (s *PACState) Manageable() bool {
+	return s != nil && (strings.TrimSpace(s.URL) == "" || s.Owned())
+}
+
+// Owned identifies our PAC setting independently of whether it is enabled.
+func (s *PACState) Owned() bool {
+	return s != nil && ownedURL(s.URL)
+}
+
+// observeServices returns states and errors in service order. Each error is nil
+// or an ObservationError; callers assign any operation-specific meaning.
+func observeServices(ctx context.Context, services []networkservice.Service) ([]ServiceObservation, []error) {
+	states := make([]ServiceObservation, len(services))
+	errs := make([]error, len(services))
+	var wg sync.WaitGroup
+	for i, service := range services {
+		wg.Go(func() {
+			setting, err := service.PAC(ctx)
+			var state *PACState
+			if err == nil {
+				state = &PACState{URL: setting.URL, Enabled: setting.Enabled}
+			}
+			states[i] = ServiceObservation{Name: service.Name(), State: state}
+			if err != nil {
+				errs[i] = ObservationError{ServiceName: service.Name(), Cause: err}
+			}
+		})
+	}
+	wg.Wait()
+	return states, errs
+}
 
 const marker = "seamless-cors.pac"
 
@@ -186,16 +218,6 @@ func publicationURL(endpoint string, generation uint64) string {
 	q.Set("v", strconv.FormatUint(generation, 10))
 	u.RawQuery = q.Encode()
 	return u.String()
-}
-
-func ownership(raw string) Ownership {
-	if strings.TrimSpace(raw) == "" {
-		return OwnershipEmpty
-	}
-	if ownedURL(raw) {
-		return OwnershipOwned
-	}
-	return OwnershipForeign
 }
 
 func ownedURL(raw string) bool {
@@ -209,16 +231,6 @@ func ownedURL(raw string) bool {
 	ip := net.ParseIP(u.Hostname())
 	return ip != nil && ip.IsLoopback()
 }
-
-func servesEndpoint(raw string, endpoint string) bool {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	return err == nil && ownedURL(raw) && u.Host == endpoint
-}
-
-type DiscoveryError struct{ Cause error }
-
-func (e DiscoveryError) Error() string { return fmt.Sprintf("discover Network Services: %v", e.Cause) }
-func (e DiscoveryError) Unwrap() error { return e.Cause }
 
 type ObservationError struct {
 	ServiceName string
@@ -254,4 +266,20 @@ type ResidueError struct{ Services []string }
 
 func (e ResidueError) Error() string {
 	return "active owned System PAC remains on " + strings.Join(e.Services, ", ")
+}
+
+// NoEligibleServicesError means no observed setting was safe to replace.
+type NoEligibleServicesError struct{}
+
+func (NoEligibleServicesError) Error() string { return "no eligible System PAC services" }
+
+// DeliveryMismatchError identifies settings that did not retain the intended publication.
+type DeliveryMismatchError struct {
+	ServiceName string
+	PACURL      string
+	Observed    PACState
+}
+
+func (e DeliveryMismatchError) Error() string {
+	return fmt.Sprintf("System PAC for %s: expected enabled %q, observed URL %q (enabled=%t)", e.ServiceName, e.PACURL, e.Observed.URL, e.Observed.Enabled)
 }
