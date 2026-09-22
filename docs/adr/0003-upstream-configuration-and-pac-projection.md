@@ -1,5 +1,7 @@
 # Upstream configuration and PAC projection
 
+The Start lifetime, retained Gateway state ownership, and projection/delivery coordination described here are updated by [ADR-0013](./0013-sequential-gateway-lifecycle.md). Unaffected domain and module contracts remain in force.
+
 The transition-based PAC publication policy is superseded by [ADR-0011](./0011-gateway-traffic-projection-and-pac-delivery.md). Gateway now compares Traffic Projections semantically, switches coherent served traffic behavior itself, and treats Network Service PAC delivery as separate status. The source-observation, path, projection, merge, rejection, and ownership decisions below remain in force.
 
 File Observation, Upstream List, and PAC Routing are independent modules coordinated only by Gateway. Gateway observes the Global Upstream List and Directory Upstream List independently, Upstream List projects each source independently into normalized Host Selectors, Origin Selectors, and warnings, and Upstream List then merges the two projections in stable Global-then-Directory order into one deduplicated Effective Upstream List without source precedence. Gateway supplies the invoking client's required absolute working directory across every Start control path so direct and router-hosted activation select the same Directory Upstream List. PAC Routing infallibly derives a PAC Projection from that Effective Upstream List, HTTPS Pipeline state, and runtime endpoint.

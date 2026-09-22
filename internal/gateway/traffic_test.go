@@ -42,7 +42,6 @@ func TestRejectedSourceFailsClosedWithoutRemovingHealthySource(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeTrafficTestRuntime(runtime)
-	drainRuntimeRequests(t, runtime)
 	if err := runtime.applyUpstreamListSourceOutcome(1, fileobservation.Contents{0xff}); err != nil {
 		t.Fatal(err)
 	}
@@ -50,22 +49,6 @@ func TestRejectedSourceFailsClosedWithoutRemovingHealthySource(t *testing.T) {
 	if state.UpstreamCount != 1 || state.UpstreamLists[1].ProjectionIssue == nil {
 		t.Fatalf("source-local rejection = %#v", state)
 	}
-}
-
-func drainRuntimeRequests(t *testing.T, runtime *trafficRuntime) {
-	t.Helper()
-	stop := make(chan struct{})
-	t.Cleanup(func() { close(stop) })
-	go func() {
-		for {
-			select {
-			case <-runtime.DeliveryRequests():
-			case <-runtime.UserCAAssessmentRequests():
-			case <-stop:
-				return
-			}
-		}
-	}()
 }
 
 func TestSourceReadFailureRetainsProjection(t *testing.T) {
@@ -107,34 +90,30 @@ func TestTrafficDemandAndServedOutcomeDerivation(t *testing.T) {
 			}
 			defer closeTrafficTestRuntime(runtime)
 			if tt.ca.Usable {
-				done := make(chan struct{})
-				go func() { runtime.AdoptUserCA(tt.ca, nil); close(done) }()
-				<-runtime.DeliveryRequests()
-				<-done
+				runtime.AdoptUserCA(tt.ca, nil)
 			}
 			state := runtime.snapshot()
 			if state.HTTPDemand != tt.httpDemand || state.HTTPSDemand != tt.httpsDemand ||
 				state.ServedHTTPCORS != tt.httpServed || state.ServedHTTPSCORS != tt.httpsServed ||
-				state.ServedHTTPSFacade != tt.facadeServed || !state.TrafficProjectionCurrent {
+				state.ServedHTTPSFacade != tt.facadeServed {
 				t.Fatalf("traffic state = %#v", state)
 			}
 		})
 	}
 }
 
-func TestTrafficStatusUsesServedProjectionAndRoutingNotProjectionCurrency(t *testing.T) {
+func TestTrafficStatusUsesServedProjectionAndRouting(t *testing.T) {
 	status := trafficStatus(runtimeState{
-		HTTPDemand:               true,
-		HTTPSDemand:              true,
-		ServedHTTPCORS:           true,
-		ServedHTTPSCORS:          true,
-		ServedHTTPSFacade:        true,
-		TrafficProjectionCurrent: false,
-		UserCAUsable:             true,
-		UserCAIdentityMatches:    true,
+		HTTPDemand:            true,
+		HTTPSDemand:           true,
+		ServedHTTPCORS:        true,
+		ServedHTTPSCORS:       true,
+		ServedHTTPSFacade:     true,
+		UserCAUsable:          true,
+		UserCAIdentityMatches: true,
 	}, true)
 	if status.HTTPCORS != TrafficFeatureActive || status.HTTPSCORS != TrafficFeatureActive ||
-		status.HTTPSFacade != TrafficFeatureActive || status.ProjectionCurrent {
+		status.HTTPSFacade != TrafficFeatureActive {
 		t.Fatalf("traffic status = %#v", status)
 	}
 }
@@ -157,10 +136,7 @@ func TestTrafficProjectionSwitchPublishesPACAndProxyTogether(t *testing.T) {
 	if strings.Contains(before.pacContent, `"scheme":"https"`) {
 		t.Fatalf("initial PAC unexpectedly contains HTTPS: %s", before.pacContent)
 	}
-	done := make(chan struct{})
-	go func() { runtime.AdoptUserCA(testUserCAState(t, time.Now().Add(time.Hour), false), nil); close(done) }()
-	<-runtime.DeliveryRequests()
-	<-done
+	runtime.AdoptUserCA(testUserCAState(t, time.Now().Add(time.Hour), false), nil)
 	after := runtime.live.current.Load()
 	if before == after || !strings.Contains(after.pacContent, `"scheme":"https"`) || after.proxy == nil {
 		t.Fatalf("served switch did not publish coherent projection: before=%p after=%p", before, after)
@@ -177,60 +153,39 @@ func TestSemanticallyEquivalentSourceUpdateDoesNotRequestDelivery(t *testing.T) 
 	}
 	defer closeTrafficTestRuntime(runtime)
 	before := runtime.live.current.Load()
-	done := make(chan error, 1)
-	go func() {
-		done <- runtime.applyUpstreamListOutcome(fileobservation.Contents("A.EXAMPLE.TEST\nb.example.test\nhttps://bad.example.test/path\n"))
-	}()
-	<-runtime.UserCAAssessmentRequests()
-	if err := <-done; err != nil {
+	if err := runtime.applyUpstreamListOutcome(fileobservation.Contents("A.EXAMPLE.TEST\nb.example.test\nhttps://bad.example.test/path\n")); err != nil {
 		t.Fatal(err)
 	}
 	if runtime.live.current.Load() != before {
 		t.Fatal("selector order or warning replaced the served traffic projection")
 	}
-	select {
-	case <-runtime.DeliveryRequests():
-		t.Fatal("warning-only equivalent projection requested PAC delivery")
-	case <-time.After(100 * time.Millisecond):
+	if runtime.lifecycle.systemPAC.(*lifecycleTestSystemSettings).applied != 0 {
+		t.Fatal("equivalent update delivered PAC")
+	}
+	if len(runtime.snapshot().UpstreamLists[0].Warnings) != 1 {
+		t.Fatal("warning-only update lost diagnostics")
 	}
 }
 
-func TestAdoptedUpdateRequestsUserCAReassessmentOnlyWhenNotUsable(t *testing.T) {
+func TestAdoptedUpdateReassessesUserCAOnlyWhenNotUsable(t *testing.T) {
 	runtime, err := newRuntime("/tmp/upstreams.txt", nil, fileobservation.Contents(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer closeTrafficTestRuntime(runtime)
-	deliveries := runtime.DeliveryRequests()
-	assessments := runtime.UserCAAssessmentRequests()
-	firstDone := make(chan error, 1)
-	go func() { firstDone <- runtime.applyUpstreamListOutcome(fileobservation.Contents("api.example.test\n")) }()
-	<-deliveries
-	select {
-	case <-assessments:
-	case <-time.After(time.Second):
-		t.Fatal("not-usable UserCA did not request reassessment")
-	}
-	if err := <-firstDone; err != nil {
+	ca := runtime.lifecycle.userCA.(*fakeUserCA)
+	if err := runtime.applyUpstreamListOutcome(fileobservation.Contents("api.example.test\n")); err != nil {
 		t.Fatal(err)
 	}
-
-	adopted := make(chan struct{})
-	go func() { runtime.AdoptUserCA(testUserCAState(t, time.Now().Add(time.Hour), false), nil); close(adopted) }()
-	<-deliveries
-	<-adopted
-	secondDone := make(chan error, 1)
-	go func() {
-		secondDone <- runtime.applyUpstreamListOutcome(fileobservation.Contents("other.example.test\n"))
-	}()
-	<-deliveries
-	if err := <-secondDone; err != nil {
+	if ca.inspectCalls != 1 {
+		t.Fatalf("not-usable assessment calls = %d", ca.inspectCalls)
+	}
+	runtime.AdoptUserCA(testUserCAState(t, time.Now().Add(time.Hour), false), nil)
+	if err := runtime.applyUpstreamListOutcome(fileobservation.Contents("other.example.test\n")); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-assessments:
-		t.Fatal("usable UserCA was reassessed after source update")
-	case <-time.After(100 * time.Millisecond):
+	if ca.inspectCalls != 1 {
+		t.Fatalf("usable state was reassessed: calls = %d", ca.inspectCalls)
 	}
 }
 
@@ -317,10 +272,72 @@ func testUserCAState(t *testing.T, expiresAt time.Time, renewalDue bool) userCAS
 	}
 }
 
-func closeTrafficTestRuntime(runtime *trafficRuntime) {
-	for _, listener := range runtime.listeners {
-		_ = listener.Close()
+func closeTrafficTestRuntime(runtime *trafficFixture) {
+	runtime.lifecycle.beginStop()
+	runtime.active.cancel()
+	for _, source := range runtime.active.upstreamLists {
+		if source.observation != nil {
+			source.observation.Close()
+		}
 	}
+	_ = runtime.CloseTraffic()
+}
+
+// trafficFixture exercises composition through its lifecycle owner while exposing
+// the serving engine for the network-boundary tests below.
+type trafficFixture struct {
+	*trafficRuntime
+	lifecycle *lifecycle
+	active    *activeRuntime
+}
+
+func newRuntime(path string, observation *fileobservation.Observation, initial fileobservation.Outcome) (*trafficFixture, error) {
+	return newRuntimeWithTransport(path, observation, initial, defaultProxyTransport())
+}
+
+func newRuntimeWithTransport(path string, observation *fileobservation.Observation, initial fileobservation.Outcome, transport *http.Transport) (*trafficFixture, error) {
+	return newRuntimeFromSources([]runtimeUpstreamListInput{{kind: UpstreamListSourceGlobal, path: path, observation: observation, initial: initial}}, transport, userCAState{}, nil)
+}
+
+func newRuntimeFromSources(inputs []runtimeUpstreamListInput, transport *http.Transport, ca userCAState, assessmentErr error) (*trafficFixture, error) {
+	engine, err := newTrafficRuntime(transport)
+	if err != nil {
+		return nil, err
+	}
+	sources := make([]runtimeUpstreamListSource, 0, len(inputs))
+	for _, input := range inputs {
+		source, err := initialRuntimeUpstreamListSource(input)
+		if err != nil {
+			_ = engine.Close()
+			return nil, err
+		}
+		sources = append(sources, source)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	active := &activeRuntime{engine: engine, ctx: ctx, cancel: cancel, phase: runtimePhaseRunning, upstreamLists: sources}
+	owner := &lifecycle{runtime: active, userCAState: ca, userCAAssessmentErr: assessmentErr,
+		systemPAC: &lifecycleTestSystemSettings{}, userCA: &fakeUserCA{state: ca, inspectErr: assessmentErr}, fatal: make(chan error, 1)}
+	owner.publishTrafficLocked(active)
+	return &trafficFixture{trafficRuntime: engine, lifecycle: owner, active: active}, nil
+}
+
+func (r *trafficFixture) snapshot() runtimeState {
+	r.lifecycle.mu.Lock()
+	defer r.lifecycle.mu.Unlock()
+	return r.lifecycle.runtimeStateLocked(r.active)
+}
+
+func (r *trafficFixture) AdoptUserCA(current userCAState, err error) {
+	r.lifecycle.changeMu.Lock()
+	defer r.lifecycle.changeMu.Unlock()
+	r.lifecycle.adoptUserCA(r.active.ctx, current, err)
+}
+
+func (r *trafficFixture) applyUpstreamListOutcome(outcome fileobservation.Outcome) error {
+	return r.applyUpstreamListSourceOutcome(0, outcome)
+}
+func (r *trafficFixture) applyUpstreamListSourceOutcome(index int, outcome fileobservation.Outcome) error {
+	return r.lifecycle.applyUpstreamListOutcome(r.active, index, outcome)
 }
 
 func writeTrafficTestFile(t *testing.T, path, contents string) {

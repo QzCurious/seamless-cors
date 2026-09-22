@@ -1,5 +1,7 @@
 # Dynamic System PAC lifecycle
 
+The Start lifetime, retained Gateway state ownership, and projection/delivery coordination described here are updated by [ADR-0013](./0013-sequential-gateway-lifecycle.md). Unaffected domain and module contracts remain in force.
+
 Status: accepted
 
 This decision supersedes the PAC integration and Stop-cleanup portions of ADR-0001, ADR-0002, ADR-0006, ADR-0009, and ADR-0011. The previous activation-scoped Control and fixed service set made lifecycle and reporting more complex without protecting additional user state, so they are replaced by one deep System PAC module exposing three synchronous operations: deliver to a required PAC Endpoint, inspect current settings, and clean up owned PAC state. System PAC owns publication generation, current Network Service discovery, PAC ownership classification, safe mutation, serialization, and verification; the separate Network Service module continues to hide platform mechanics.

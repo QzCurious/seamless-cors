@@ -70,7 +70,7 @@ func TestStopCleansSystemPACWhileRuntimeServesAndRemainsFulfilledOnFailure(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	lifecycle.runtime = &activeRuntime{engine: runtime, ctx: ctx, cancel: cancel, phase: runtimePhaseRunning}
+	lifecycle.runtime = &activeRuntime{engine: runtime.trafficRuntime, ctx: ctx, cancel: cancel, phase: runtimePhaseRunning}
 
 	result, err := lifecycle.Stop(context.Background())
 	if err != nil {
@@ -99,10 +99,15 @@ func TestStopQuiescesAdmittedDeliveryAndRejectsLaterDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	active := &activeRuntime{engine: runtime, ctx: ctx, cancel: cancel, phase: runtimePhaseRunning}
+	active := &activeRuntime{engine: runtime.trafficRuntime, ctx: ctx, cancel: cancel, phase: runtimePhaseRunning}
 	lifecycle.runtime = active
 	deliveryDone := make(chan struct{})
-	go func() { _, _ = lifecycle.deliverSystemPAC(ctx, active); close(deliveryDone) }()
+	go func() {
+		lifecycle.changeMu.Lock()
+		_, _ = lifecycle.deliverSystemPAC(ctx, active)
+		lifecycle.changeMu.Unlock()
+		close(deliveryDone)
+	}()
 	<-pac.deliverEntered
 	stopDone := make(chan StopResult, 1)
 	go func() { result, _ := lifecycle.Stop(context.Background()); stopDone <- result }()

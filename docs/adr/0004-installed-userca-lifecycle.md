@@ -1,5 +1,7 @@
 # Installed UserCA lifecycle
 
+The Start lifetime, retained Gateway state ownership, and projection/delivery coordination described here are updated by [ADR-0013](./0013-sequential-gateway-lifecycle.md). Unaffected domain and module contracts remain in force.
+
 The gateway keeps one long-lived seamless-cors-owned development CA in the current user's operating-system trust store and protects its unencrypted local signing key with current-user file permissions. This avoids trust or unlock prompts during normal Gateway Runtime cycles without introducing a secret-store dependency. UserCA stores exactly one certificate and matching private key directly in its final local directory; interruption may leave an unusable footprint for the next explicit install or uninstall to reconcile.
 
 Install reuses valid material and repairs missing trust or permissions in place. An authority within 90 days of expiry remains usable and reports renewal due, while explicit install replaces renewal-due, expired, invalid, or ambiguous state. Replacement removes and verifies all owned trust and local material before publishing and trusting one fresh pair; it deliberately provides no overlapping authorities or zero-downtime rotation guarantee. UserCA retains no version, generation, or authority history.

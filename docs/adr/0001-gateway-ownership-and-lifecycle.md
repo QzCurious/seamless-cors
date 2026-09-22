@@ -1,5 +1,7 @@
 # Gateway ownership and lifecycle
 
+The Start lifetime, retained Gateway state ownership, and projection/delivery coordination described here are updated by [ADR-0013](./0013-sequential-gateway-lifecycle.md). Unaffected domain and module contracts remain in force.
+
 The Stop ordering and cleanup scope in this decision are superseded by [ADR-0012](./0012-dynamic-system-pac-lifecycle.md). Stop now attempts System PAC and Gateway State Cache cleanup whether it finds a start-hosted owner, a router-only owner, or no owner; a live runtime keeps its endpoints serving through System PAC cleanup.
 
 One Gateway Owner holds the Gateway Ownership Lock as the exclusive ownership authority and publishes the ephemeral Router address and token through the Gateway State Cache. The lock and cache share one XDG Gateway Runtime Directory, but the cache is discovery data rather than an ownership primitive: losing it cannot permit a second owner while the lock remains held, and owner death releases the lock even when stale cache state remains for authenticated health verification to reject. An ownerless `start` hosts the Router and Gateway Runtime, `serve` hosts only the Router, and a command finding a reachable owner routes through that owner instead of competing for ownership; ownerless CA lifecycle work uses a discoverable, non-promotable Transient Gateway Owner, while ownerless status briefly holds the lock without publishing discovery state.

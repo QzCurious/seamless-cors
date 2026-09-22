@@ -16,475 +16,43 @@ var (
 	errOwnerTransition = errors.New("gateway ownership is transitioning")
 )
 
-// StartKind identifies the semantic outcome of a Start operation.  Start
-// outcomes are deliberately scoped to Start; they are not shared with the
-// other Gateway commands.
-type StartKind string
-
-type CommandFulfillment string
-
-const (
-	CommandFulfilled   CommandFulfillment = "fulfilled"
-	CommandUnfulfilled CommandFulfillment = "unfulfilled"
-)
-
-const (
-	StartResultStarted                             StartKind = "started"
-	StartResultAlreadyRunning                      StartKind = "already-running"
-	StartResultOwnerTransition                     StartKind = "owner-transition"
-	StartResultUpstreamListCreationConsentRequired StartKind = "upstream-list-creation-consent-required"
-	StartResultStartAlreadyMutating                StartKind = "start-already-mutating"
-	StartResultStopCancelled                       StartKind = "stop-cancelled"
-	StartResultCleanupFailed                       StartKind = "cleanup-failed"
-)
-
-type StartRequest struct {
-	WorkingDirectory            string                            `json:"workingDirectory" minLength:"1"`
-	UpstreamListCreationConsent *UpstreamListCreationConsentInput `json:"upstreamListCreationConsent,omitempty"`
-}
-
-// StartResult is the closed semantic result of a Start operation.  Concrete
-// variants carry only the payload that is legal for that outcome.
-type StartResult interface {
-	Kind() StartKind
-	Fulfillment() CommandFulfillment
-	UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail
-	startResult()
-}
-
-// Started reports that the runtime was started and includes initial guidance.
-type Started struct {
-	Guidance                    StartGuidance
-	UpstreamListCreationWarning *UpstreamListCreationWarningDetail
-}
-
-// AlreadyRunning reports that a runtime was already active.
-type AlreadyRunning struct{}
-
-// StartOwnerTransition reports that ownership is being acquired or released.
-type StartOwnerTransition struct{}
-
-type StartUpstreamListCreationConsentRequired struct{ Consent UpstreamListCreationConsent }
-
-type UpstreamListCreationConsent struct {
-	Path                     string                          `json:"path"`
-	DefaultContents          string                          `json:"defaultContents"`
-	MissingParentDirectories []string                        `json:"missingParentDirectories,omitempty"`
-	Fingerprint              UpstreamListCreationFingerprint `json:"fingerprint"`
-}
-
-type UpstreamListCreationDecision string
-
-const (
-	UpstreamListCreationAccepted UpstreamListCreationDecision = "accepted"
-	UpstreamListCreationDeclined UpstreamListCreationDecision = "declined"
-)
-
-type UpstreamListCreationFingerprint string
-type UpstreamListCreationConsentInput struct {
-	Decision    UpstreamListCreationDecision    `json:"decision"`
-	Fingerprint UpstreamListCreationFingerprint `json:"fingerprint,omitempty"`
-}
-
-// StartAlreadyMutating reports that another start/CA mutation is in progress.
-type StartAlreadyMutating struct {
-	UpstreamListCreationWarning *UpstreamListCreationWarningDetail
-}
-
-// StartStopCancelled reports that Stop cancelled the Start operation.
-type StartStopCancelled struct {
-	UpstreamListCreationWarning *UpstreamListCreationWarningDetail
-}
-
-type StartCleanupFailed struct {
-	Failures                    []CleanupFailure
-	UpstreamListCreationWarning *UpstreamListCreationWarningDetail
-}
-
-type UpstreamListCreationWarningDetail struct {
-	Cause string `json:"cause"`
-}
-
-func startFulfillment(kind StartKind) CommandFulfillment {
-	if kind == StartResultStarted || kind == StartResultAlreadyRunning {
-		return CommandFulfilled
-	}
-	return CommandUnfulfilled
-}
-
-func (Started) Kind() StartKind                 { return StartResultStarted }
-func (Started) Fulfillment() CommandFulfillment { return startFulfillment(StartResultStarted) }
-func (r Started) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return r.UpstreamListCreationWarning
-}
-func (Started) startResult()           {}
-func (AlreadyRunning) Kind() StartKind { return StartResultAlreadyRunning }
-func (AlreadyRunning) Fulfillment() CommandFulfillment {
-	return startFulfillment(StartResultAlreadyRunning)
-}
-func (AlreadyRunning) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return nil
-}
-func (AlreadyRunning) startResult()          {}
-func (StartOwnerTransition) Kind() StartKind { return StartResultOwnerTransition }
-func (StartOwnerTransition) Fulfillment() CommandFulfillment {
-	return startFulfillment(StartResultOwnerTransition)
-}
-func (StartOwnerTransition) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return nil
-}
-func (StartOwnerTransition) startResult() {}
-func (StartUpstreamListCreationConsentRequired) Kind() StartKind {
-	return StartResultUpstreamListCreationConsentRequired
-}
-func (StartUpstreamListCreationConsentRequired) Fulfillment() CommandFulfillment {
-	return CommandUnfulfilled
-}
-func (StartUpstreamListCreationConsentRequired) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return nil
-}
-func (StartUpstreamListCreationConsentRequired) startResult() {}
-func (StartAlreadyMutating) Kind() StartKind                  { return StartResultStartAlreadyMutating }
-func (StartAlreadyMutating) Fulfillment() CommandFulfillment {
-	return startFulfillment(StartResultStartAlreadyMutating)
-}
-func (r StartAlreadyMutating) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return r.UpstreamListCreationWarning
-}
-func (StartAlreadyMutating) startResult()  {}
-func (StartStopCancelled) Kind() StartKind { return StartResultStopCancelled }
-func (StartStopCancelled) Fulfillment() CommandFulfillment {
-	return startFulfillment(StartResultStopCancelled)
-}
-func (r StartStopCancelled) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return r.UpstreamListCreationWarning
-}
-func (StartStopCancelled) startResult()    {}
-func (StartCleanupFailed) Kind() StartKind { return StartResultCleanupFailed }
-func (StartCleanupFailed) Fulfillment() CommandFulfillment {
-	return startFulfillment(StartResultCleanupFailed)
-}
-func (r StartCleanupFailed) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return r.UpstreamListCreationWarning
-}
-func (StartCleanupFailed) startResult() {}
-
-type SystemPACServiceState struct {
-	Name       string `json:"name"`
-	URL        string `json:"url"`
-	Enabled    *bool  `json:"enabled,omitempty"` // Nil when the setting could not be observed.
-	Manageable bool   `json:"manageable"`
-	Owned      bool   `json:"owned"`
-}
-
-type SystemPACIssueKind string
-
-const (
-	SystemPACIssueDelivery     SystemPACIssueKind = "delivery"
-	SystemPACIssueDiscovery    SystemPACIssueKind = "discovery"
-	SystemPACIssueObservation  SystemPACIssueKind = "observation"
-	SystemPACIssueMutation     SystemPACIssueKind = "mutation"
-	SystemPACIssueVerification SystemPACIssueKind = "verification"
-	SystemPACIssueResidue      SystemPACIssueKind = "residue"
-)
-
-type SystemPACIssue struct {
-	Kind        SystemPACIssueKind `json:"kind"`
-	ServiceName string             `json:"serviceName,omitempty"`
-	Cause       string             `json:"cause"`
-}
-
-type SystemPACReport struct {
-	Services              []SystemPACServiceState `json:"services"`
-	RoutesCurrentEndpoint bool                    `json:"routesCurrentEndpoint"`
-	Issues                []SystemPACIssue        `json:"issues,omitempty"`
-}
-
-type StartGuidance struct {
-	UpstreamLists []UpstreamListSourceDetail `json:"upstreamLists"`
-	SystemPAC     SystemPACReport            `json:"systemPac"`
-	Traffic       TrafficStatusDetail        `json:"traffic"`
-	InstalledCA   InstalledCAStatusDetail    `json:"installedCA"`
-	UserCAIssue   *UserCAAssessmentIssue     `json:"userCAAssessmentIssue,omitempty"`
-}
-
-type UpstreamListSourceKind string
-
-const (
-	UpstreamListSourceGlobal    UpstreamListSourceKind = "global"
-	UpstreamListSourceDirectory UpstreamListSourceKind = "directory"
-)
-
-type UpstreamListSourceDetail struct {
-	Kind            UpstreamListSourceKind       `json:"kind"`
-	Path            string                       `json:"path"`
-	Warnings        []UpstreamListWarningDetail  `json:"warnings,omitempty"`
-	FileSyncIssue   *FileSyncIssue               `json:"fileSyncIssue,omitempty"`
-	ProjectionIssue *UpstreamListProjectionIssue `json:"projectionIssue,omitempty"`
-}
-
-type UpstreamListWarningDetail struct {
-	Source     UpstreamListSourceKind `json:"source"`
-	Path       string                 `json:"path"`
-	Line       int                    `json:"line"`
-	Text       string                 `json:"text"`
-	Diagnostic string                 `json:"diagnostic"`
-}
-
-type FileSyncIssueKind string
-
-const (
-	FileSyncIssueFileUnreadable     FileSyncIssueKind = "file-unreadable"
-	FileSyncIssueObservationStopped FileSyncIssueKind = "observation-stopped"
-)
-
-type FileSyncIssue struct {
-	Kind  FileSyncIssueKind `json:"kind"`
-	Cause string            `json:"cause"`
-}
-
-type UpstreamListProjectionIssue struct {
-	Cause string `json:"cause"`
-}
-
-type StopResultKind string
-
-const (
-	StopResultStopped    StopResultKind = "stopped"
-	StopResultNotRunning StopResultKind = "not-running"
-)
-
-type StopResult struct {
-	Kind               StopResultKind
-	Warnings           []CommandWarning
-	CleanupFulfillment CommandFulfillment
-	SystemPACCleanup   SystemPACReport
-	CleanupFailures    []CleanupFailure
-}
-
-func (r StopResult) Fulfillment() CommandFulfillment {
-	return CommandFulfilled
-}
-
-type CleanupFailure struct {
-	Subject    CleanupSubjectKind `json:"subject"`
-	Diagnostic string             `json:"diagnostic,omitempty"`
-}
-
-type CleanupSubjectKind string
-
-const (
-	CleanupSubjectSystemPAC         CleanupSubjectKind = "system-pac"
-	CleanupSubjectGatewayStateCache CleanupSubjectKind = "gateway-state-cache"
-)
-
-type CommandWarning struct {
-	Kind       CommandWarningKind `json:"kind"`
-	Diagnostic string             `json:"diagnostic,omitempty"`
-}
-
-type CommandWarningKind string
-
-const (
-	CommandWarningRuntimeCloseFailed CommandWarningKind = "runtime-close-failed"
-)
-
-type InstallResultKind string
-
-const (
-	InstallResultInstalled       InstallResultKind = "installed"
-	InstallResultAlreadyMutating InstallResultKind = "already-mutating"
-	InstallResultOwnerEnding     InstallResultKind = "owner-ending"
-	InstallResultOwnerTransition InstallResultKind = "owner-transition"
-)
-
-type InstallResult struct {
-	Kind               InstallResultKind
-	InstalledCAExpires time.Time
-}
-
-func (r InstallResult) Fulfillment() CommandFulfillment {
-	if r.Kind == InstallResultInstalled {
-		return CommandFulfilled
-	}
-	return CommandUnfulfilled
-}
-
-type UninstallResultKind string
-
-const (
-	UninstallResultUninstalled     UninstallResultKind = "uninstalled"
-	UninstallResultConsentRequired UninstallResultKind = "consent-required"
-	UninstallResultAlreadyMutating UninstallResultKind = "already-mutating"
-	UninstallResultOwnerEnding     UninstallResultKind = "owner-ending"
-	UninstallResultOwnerTransition UninstallResultKind = "owner-transition"
-	UninstallResultIncomplete      UninstallResultKind = "incomplete"
-)
-
-type UninstallResult struct {
-	Kind               UninstallResultKind
-	ConsentFingerprint string
-	CleanupIssue       *UserCACleanupIssue
-}
-
-func (r UninstallResult) Fulfillment() CommandFulfillment {
-	if r.Kind == UninstallResultUninstalled {
-		return CommandFulfilled
-	}
-	return CommandUnfulfilled
-}
-
-type UninstallRequest struct {
-	ConsentFingerprint string `json:"consentFingerprint,omitempty"`
-}
-
-type GatewayStatusKind string
-
-type StatusResultKind string
-
-const (
-	StatusResultReported        StatusResultKind = "reported"
-	StatusResultOwnerTransition StatusResultKind = "owner-transition"
-)
-
-const (
-	GatewayStatusNotRunning GatewayStatusKind = "not-running"
-	GatewayStatusStaleCache GatewayStatusKind = "stale-cache"
-	GatewayStatusRouterOnly GatewayStatusKind = "router-only"
-	GatewayStatusEnding     GatewayStatusKind = "ending"
-	GatewayStatusStarting   GatewayStatusKind = "starting"
-	GatewayStatusRunning    GatewayStatusKind = "running"
-)
-
-type StatusResult struct {
-	Kind StatusResultKind
-	StatusReport
-}
-
-type StatusReport struct {
-	State                 GatewayStatusKind       `json:"state"`
-	Owner                 *OwnerStatusDetail      `json:"owner,omitempty"`
-	Runtime               *RuntimeStatusDetail    `json:"runtime,omitempty"`
-	SystemPAC             SystemPACReport         `json:"systemPac"`
-	Cleanup               CleanupStatusDetail     `json:"cleanup"`
-	InstalledCA           InstalledCAStatusDetail `json:"installedCA"`
-	UserCAAssessmentIssue *UserCAAssessmentIssue  `json:"userCAAssessmentIssue,omitempty"`
-}
-
-func (r StatusResult) Fulfillment() CommandFulfillment {
-	if r.Kind == StatusResultReported {
-		return CommandFulfilled
-	}
-	return CommandUnfulfilled
-}
-
-type OwnerStatusDetail struct {
-	RouterListen string `json:"routerListen"`
-}
-
-type RuntimeStatusDetail struct {
-	ProxyListen             string                     `json:"proxyListen"`
-	PACListen               string                     `json:"pacListen"`
-	UpstreamLists           []UpstreamListSourceDetail `json:"upstreamLists"`
-	UpstreamCount           int                        `json:"upstreamCount"`
-	Traffic                 TrafficStatusDetail        `json:"traffic"`
-	LatestSystemPACDelivery *SystemPACReport           `json:"latestSystemPacDelivery,omitempty"`
-}
-
-type TrafficFeatureState string
-
-const (
-	TrafficFeatureActive   TrafficFeatureState = "active"
-	TrafficFeatureBlocked  TrafficFeatureState = "blocked"
-	TrafficFeatureInactive TrafficFeatureState = "inactive"
-)
-
-type TrafficStatusDetail struct {
-	RoutingReady      bool                `json:"routingReady"`
-	ProjectionCurrent bool                `json:"projectionCurrent"`
-	HTTPCORS          TrafficFeatureState `json:"httpCors"`
-	HTTPSCORS         TrafficFeatureState `json:"httpsCors"`
-	HTTPSFacade       TrafficFeatureState `json:"httpsFacade"`
-}
-
-type UserCAAssessmentIssue struct {
-	Cause  string `json:"cause"`
-	Action string `json:"action,omitempty"`
-}
-
-type UserCACleanupIssue struct {
-	Cause  string `json:"cause"`
-	Action string `json:"action,omitempty"`
-}
-
-type CleanupStatusDetail struct {
-	State    CleanupStatusState           `json:"state"`
-	Subjects []CleanupSubjectStatusDetail `json:"subjects"`
-}
-
-type CleanupStatusState string
-
-const (
-	CleanupStatusNone    CleanupStatusState = "none"
-	CleanupStatusNeeded  CleanupStatusState = "needed"
-	CleanupStatusUnknown CleanupStatusState = "unknown"
-)
-
-type CleanupSubjectStatusDetail struct {
-	Subject    CleanupSubjectKind `json:"subject"`
-	State      CleanupStatusState `json:"state"`
-	Diagnostic string             `json:"diagnostic,omitempty"`
-}
-
-type InstalledCAStatusDetail struct {
-	Health       CAHealthStatus      `json:"health"`
-	Expires      time.Time           `json:"expires,omitempty"`
-	RenewalDue   bool                `json:"renewalDue,omitempty"`
-	CleanupIssue *UserCACleanupIssue `json:"cleanupIssue,omitempty"`
-}
-
-type CAHealthStatus string
-
-const (
-	CAHealthUsable    CAHealthStatus = "usable"
-	CAHealthNotUsable CAHealthStatus = "not-usable"
-	CAHealthMutating  CAHealthStatus = "mutating"
-)
-
+// Lock order is CA admission, changeMu, then mu. changeMu keeps publication and
+// delivery sequential; mu protects retained facts and is never held during I/O.
 type lifecycle struct {
 	mu                     sync.Mutex
-	deliveryMu             sync.Mutex
+	changeMu               sync.Mutex
 	caAdmissionMu          sync.Mutex
 	systemPAC              systempac.Module
 	userCA                 userCAModule
 	userCAState            userCAState
 	userCAAssessmentErr    error
+	userCARevision         uint64
+	deadlineTimer          *time.Timer
 	coord                  *coordinator
-	runtimeDir             string
 	globalUpstreamListPath string
 	routerListen           string
 	ownerCache             stateCache
-	startMutating          bool
-	startCancel            context.CancelFunc
-	startDone              chan struct{}
+	start                  *startOperation
 	ownerEnding            bool
 	transientOwner         bool
 	caMutating             bool
-	assessmentPending      bool
 	runtime                *activeRuntime
 	userCACleanupIssue     *UserCACleanupIssue
 	fatal                  chan error
 }
 
+type startOperation struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
 type activeRuntime struct {
-	engine             *trafficRuntime
-	latestPACDelivery  *SystemPACReport
-	ctx                context.Context
-	cancel             context.CancelFunc
-	done               chan error
-	phase              runtimePhase
-	deadlineTimer      *time.Timer
-	deadlineGeneration uint64
+	engine            *trafficRuntime
+	latestPACDelivery *SystemPACReport
+	ctx               context.Context
+	cancel            context.CancelFunc
+	phase             runtimePhase
+	upstreamLists     []runtimeUpstreamListSource
 }
 
 type runtimePhase string
@@ -537,7 +105,6 @@ func newLifecycleState(
 		userCAState:            initial,
 		userCAAssessmentErr:    assessmentErr,
 		coord:                  coord,
-		runtimeDir:             coord.RuntimeDirPath(),
 		globalUpstreamListPath: defaultGlobalUpstreamListPath(),
 		routerListen:           routerListen,
 		fatal:                  make(chan error, 1),
@@ -560,232 +127,176 @@ func (f *lifecycle) SetOwnerCache(cache stateCache) {
 	f.ownerCache = cache
 }
 
-func (f *lifecycle) scheduleUserCADeadline(active *activeRuntime, current userCAState) {
+// adoptUserCA publishes the retained facts and their traffic consequences. The
+// caller holds changeMu through the subsequent delivery, never mu during I/O.
+func (f *lifecycle) adoptUserCA(ctx context.Context, current userCAState, assessmentErr error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.runtime != active {
-		return
+	f.userCAState = current
+	f.userCAAssessmentErr = assessmentErr
+	f.userCARevision++
+	active := f.runtime
+	changed := false
+	if active != nil {
+		changed = f.publishTrafficLocked(active)
 	}
-	f.scheduleUserCADeadlineLocked(active, current)
+	f.resetUserCADeadlineLocked(active)
+	f.mu.Unlock()
+	if changed {
+		_, _ = f.deliverSystemPAC(ctx, active)
+	}
 }
 
-func (f *lifecycle) scheduleUserCADeadlineLocked(active *activeRuntime, current userCAState) {
-	if !current.Usable {
-		return
+func (f *lifecycle) resetUserCADeadlineLocked(active *activeRuntime) {
+	if f.deadlineTimer != nil {
+		f.deadlineTimer.Stop()
+		f.deadlineTimer = nil
 	}
-	state := active.engine.snapshot()
-	if active.deadlineTimer != nil {
-		active.deadlineTimer.Stop()
+	if active != nil && !f.ownerEnding && f.userCAAssessmentErr == nil && f.userCAState.Usable {
+		revision := f.userCARevision
+		f.deadlineTimer = time.AfterFunc(time.Until(f.userCAState.ExpiresAt), func() { f.handleUserCADeadline(active, revision) })
 	}
-	active.deadlineGeneration = state.UserCARevision
-	now := time.Now()
-	delay := current.ExpiresAt.Sub(now)
-	if delay < 0 {
-		delay = 0
-	}
-	generation := active.deadlineGeneration
-	active.deadlineTimer = time.AfterFunc(delay, func() {
-		f.handleUserCADeadline(active, generation)
-	})
 }
 
-func (f *lifecycle) cancelUserCADeadline(active *activeRuntime) {
+// beginStop prevents admission and cancels startup without stopping traffic.
+func (f *lifecycle) beginStop() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if active.deadlineTimer != nil {
-		active.deadlineTimer.Stop()
-		active.deadlineTimer = nil
+	f.ownerEnding = true
+	if f.start != nil {
+		f.start.cancel()
 	}
-	active.deadlineGeneration = 0
+	if f.deadlineTimer != nil {
+		f.deadlineTimer.Stop()
+		f.deadlineTimer = nil
+	}
 }
 
 func (f *lifecycle) handleUserCADeadline(active *activeRuntime, revision uint64) {
-	if !f.caAdmissionMu.TryLock() {
-		f.mu.Lock()
-		if f.runtime == active {
-			f.assessmentPending = true
-		}
-		f.mu.Unlock()
-		return
-	}
-	defer f.finishUserCAAssessment(active)
+	f.caAdmissionMu.Lock()
+	defer f.caAdmissionMu.Unlock()
+	f.changeMu.Lock()
 	f.mu.Lock()
-	if f.runtime != active {
-		f.mu.Unlock()
-		return
-	}
-	if f.caMutating || f.startMutating {
-		f.assessmentPending = true
-		f.mu.Unlock()
-		return
-	}
+	valid := !f.ownerEnding && f.runtime == active && f.userCARevision == revision && f.userCAState.Usable
 	f.mu.Unlock()
-	if !active.engine.ExpireUserCA(revision) {
+	if !valid {
+		f.changeMu.Unlock()
 		return
 	}
-	f.mu.Lock()
-	if f.runtime == active {
-		f.userCAState = userCAState{}
-		f.userCAAssessmentErr = nil
-	}
-	f.mu.Unlock()
-	f.assessUserCA(active)
+	// Expiry withdraws HTTPS before inspecting trust again.
+	f.adoptUserCA(active.ctx, userCAState{}, nil)
+	current, err := f.userCA.Inspect(active.ctx)
+	f.adoptUserCA(active.ctx, current, err)
+	f.changeMu.Unlock()
 }
 
-func (f *lifecycle) requestUserCAAssessment(active *activeRuntime) {
-	if !f.caAdmissionMu.TryLock() {
-		f.mu.Lock()
-		if f.runtime == active {
-			f.assessmentPending = true
-		}
-		f.mu.Unlock()
+func (f *lifecycle) reassessUserCA(active *activeRuntime) {
+	f.caAdmissionMu.Lock()
+	defer f.caAdmissionMu.Unlock()
+	f.changeMu.Lock()
+	defer f.changeMu.Unlock()
+	f.mu.Lock()
+	needed := !f.ownerEnding && f.runtime == active && (!f.userCAState.Usable || f.userCAAssessmentErr != nil)
+	f.mu.Unlock()
+	if !needed {
 		return
 	}
-	go func() {
-		defer f.finishUserCAAssessment(active)
-		f.assessUserCA(active)
-	}()
+	current, err := f.userCA.Inspect(active.ctx)
+	f.adoptUserCA(active.ctx, current, err)
 }
 
-func (f *lifecycle) finishUserCAAssessment(active *activeRuntime) {
-	f.caAdmissionMu.Unlock()
-	f.mu.Lock()
-	pending := f.assessmentPending && f.runtime == active
-	f.assessmentPending = false
-	f.mu.Unlock()
-	if pending {
-		f.requestUserCAAssessment(active)
-	}
-}
-
-func (f *lifecycle) assessUserCA(active *activeRuntime) {
-	f.mu.Lock()
-	if f.runtime != active {
-		f.mu.Unlock()
-		return
-	}
-	ctx := active.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	assessmentCtx, cancel := context.WithCancel(ctx)
-	f.mu.Unlock()
-	defer cancel()
-
-	assessment, assessmentErr := f.userCA.Inspect(assessmentCtx)
-
-	f.mu.Lock()
-	stillActive := f.runtime == active
-	if stillActive {
-		f.userCAState = assessment
-		f.userCAAssessmentErr = assessmentErr
-	}
-	f.mu.Unlock()
-	if !stillActive {
-		return
-	}
-	active.engine.AdoptUserCA(assessment, assessmentErr)
-	if assessmentErr == nil && assessment.Usable {
-		f.scheduleUserCADeadline(active, assessment)
-	} else {
-		f.cancelUserCADeadline(active)
-	}
-}
-
-func (f *lifecycle) finishCAMutation(active *activeRuntime) {
+func (f *lifecycle) finishCAMutation() {
 	f.mu.Lock()
 	if f.transientOwner {
 		f.ownerEnding = true
 	}
 	f.caMutating = false
-	pending := f.assessmentPending && f.runtime == active && active != nil
-	f.assessmentPending = false
 	f.mu.Unlock()
 	f.caAdmissionMu.Unlock()
-	if pending {
-		f.requestUserCAAssessment(active)
-	}
 }
 
 func (f *lifecycle) ExecuteStart(ctx context.Context, request StartRequest) (StartResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	if f.ownerEnding {
 		f.mu.Unlock()
 		return StartStopCancelled{}, nil
 	}
-	if f.transientOwner {
+	if f.transientOwner || f.start != nil || f.caMutating {
 		f.mu.Unlock()
 		return StartAlreadyMutating{}, nil
 	}
 	if f.runtime != nil {
 		active := f.runtime
 		f.mu.Unlock()
-		if _, delivered := f.deliverSystemPAC(ctx, active); !delivered {
+		f.changeMu.Lock()
+		defer f.changeMu.Unlock()
+		if _, delivered := f.deliverSystemPAC(context.Background(), active); !delivered {
 			return StartStopCancelled{}, nil
 		}
 		return AlreadyRunning{}, nil
 	}
-	if f.startMutating {
-		f.mu.Unlock()
-		return StartAlreadyMutating{}, nil
-	}
-	if f.caMutating {
-		f.mu.Unlock()
-		return StartAlreadyMutating{}, nil
-	}
-	f.startMutating = true
-	startCtx, cancel := context.WithCancel(ctx)
-	f.startCancel = cancel
-	f.startDone = make(chan struct{})
-	done := f.startDone
+	// Reserve Start while validating input and consent. Acceptance happens only
+	// after these checks and a final request-cancellation check.
+	startCtx, cancel := context.WithCancel(context.Background())
+	operation := &startOperation{cancel: cancel, done: make(chan struct{})}
+	f.start = operation
 	f.mu.Unlock()
 	defer func() {
+		cancel()
 		f.mu.Lock()
-		f.startMutating = false
-		f.startCancel = nil
-		f.startDone = nil
-		active := f.runtime
-		pending := f.assessmentPending && active != nil
-		f.assessmentPending = false
+		f.start = nil
+		close(operation.done)
 		f.mu.Unlock()
-		if pending {
-			f.requestUserCAAssessment(active)
-		}
-		close(done)
 	}()
-
-	return startSequence{lifecycle: f}.Execute(startCtx, request)
+	directoryPath, err := directoryUpstreamListPath(request.WorkingDirectory)
+	if err != nil {
+		return nil, err
+	}
+	create, result, err := authorizeUpstreamListCreation(f.globalUpstreamListPath, request)
+	if err != nil || result != nil {
+		return result, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if startCtx.Err() != nil {
+		return StartStopCancelled{}, nil
+	}
+	return f.activate(startCtx, directoryPath, create)
 }
 
 func (f *lifecycle) Stop(ctx context.Context) (StopResult, error) {
 	var warnings []CommandWarning
+	f.beginStop()
 	f.mu.Lock()
-	f.ownerEnding = true
-	startCancel := f.startCancel
-	startDone := f.startDone
+	operation := f.start
 	active := f.runtime
 	ownerCache := f.ownerCache
 	f.mu.Unlock()
-	if startCancel != nil {
-		startCancel()
-	}
-	if active != nil {
-		f.cancelUserCADeadline(active)
-	}
 	var cleanupFailures []CleanupFailure
-	if startDone != nil {
-		<-startDone
+	if operation != nil {
+		<-operation.done
 	}
-	f.deliveryMu.Lock()
+	// Settle admitted CA work and every projection/delivery sequence before cleanup.
+	f.caAdmissionMu.Lock()
+	defer f.caAdmissionMu.Unlock()
+	f.changeMu.Lock()
 	cleanupErr := f.systemPAC.Cleanup(ctx)
 	cleanupObservation, inspectionErr := f.systemPAC.Inspect(ctx)
 	cleanupErr = errors.Join(cleanupErr, inspectionErr)
 	if cleanupErr != nil {
 		cleanupFailures = append(cleanupFailures, CleanupFailure{Subject: CleanupSubjectSystemPAC, Diagnostic: cleanupErr.Error()})
 	}
-	f.deliveryMu.Unlock()
+	f.changeMu.Unlock()
 	if active != nil {
 		active.cancel()
+		for _, source := range active.upstreamLists {
+			if source.observation != nil {
+				source.observation.Close()
+			}
+		}
 		if err := active.engine.CloseTraffic(); err != nil {
 			warnings = append(warnings, CommandWarning{Kind: CommandWarningRuntimeCloseFailed, Diagnostic: err.Error()})
 		}
@@ -795,10 +306,6 @@ func (f *lifecycle) Stop(ctx context.Context) (StopResult, error) {
 		f.runtime = nil
 	}
 	f.mu.Unlock()
-	// Once traffic and any preempted Start have settled, wait for admitted
-	// owner-owned CA work before durable footprint cleanup.
-	f.caAdmissionMu.Lock()
-	f.caAdmissionMu.Unlock()
 	var ownedCache *stateCache
 	if ownerCache.HTTPRouterListen != "" && ownerCache.Token != "" {
 		ownedCache = &ownerCache
@@ -820,9 +327,11 @@ func (f *lifecycle) Status(ctx context.Context, stale bool) (StatusResult, error
 	caAssessmentErr := f.userCAAssessmentErr
 	caMutating := f.caMutating
 	caCleanupIssue := f.userCACleanupIssue
+	var state runtimeState
 	var phase runtimePhase
 	var latestPACDelivery *SystemPACReport
 	if active != nil {
+		state = f.runtimeStateLocked(active)
 		phase = active.phase
 		latestPACDelivery = active.latestPACDelivery
 	}
@@ -854,7 +363,6 @@ func (f *lifecycle) Status(ctx context.Context, stale bool) (StatusResult, error
 		if phase != runtimePhaseRunning {
 			result.State = GatewayStatusStarting
 		}
-		state := active.engine.snapshot()
 		if phase == runtimePhaseRunning {
 			result.State = GatewayStatusRunning
 		}
@@ -900,61 +408,35 @@ func (f *lifecycle) Install(ctx context.Context) (InstallResult, error) {
 		return InstallResult{Kind: InstallResultAlreadyMutating}, nil
 	}
 	f.mu.Lock()
-	ownerEnding := f.ownerEnding
-	startMutating := f.startMutating
-	if !ownerEnding && !startMutating {
-		f.caMutating = true
-	}
-	f.mu.Unlock()
-	if ownerEnding || startMutating {
-		f.caAdmissionMu.Unlock()
-		if startMutating {
-			return InstallResult{Kind: InstallResultAlreadyMutating}, nil
-		}
-		return InstallResult{Kind: InstallResultOwnerEnding}, nil
-	}
-	f.mu.Lock()
-	active := f.runtime
-	f.mu.Unlock()
-	defer f.finishCAMutation(active)
-	// Withdraw UserCA-backed routes before trust or signing material changes.
-	if active != nil {
-		active.engine.AdoptUserCA(userCAState{}, nil)
-		f.cancelUserCADeadline(active)
-	}
-	// Once admitted, CA work belongs to the owner rather than the request.
-	current, err := f.userCA.Install(context.Background())
-	if err != nil {
-		if active != nil {
-			active.engine.AdoptUserCA(userCAState{}, err)
-		}
-		f.mu.Lock()
-		f.userCAState = userCAState{}
-		f.userCAAssessmentErr = err
+	if f.ownerEnding || f.start != nil {
+		ending := f.ownerEnding
 		f.mu.Unlock()
+		f.caAdmissionMu.Unlock()
+		if ending {
+			return InstallResult{Kind: InstallResultOwnerEnding}, nil
+		}
+		return InstallResult{Kind: InstallResultAlreadyMutating}, nil
+	}
+	f.caMutating = true
+	f.mu.Unlock()
+	defer f.finishCAMutation()
+	f.changeMu.Lock()
+	defer f.changeMu.Unlock()
+	// Withdraw HTTPS, mutate trust, then adopt the complete returned facts.
+	ownerCtx := context.Background()
+	f.adoptUserCA(ownerCtx, userCAState{}, nil)
+	current, err := f.userCA.Install(ownerCtx)
+	if err != nil {
+		current = userCAState{}
+	}
+	f.adoptUserCA(ownerCtx, current, err)
+	if err != nil {
 		return InstallResult{}, err
 	}
 	f.mu.Lock()
-	stillLive := f.runtime == active && active != nil
-	f.mu.Unlock()
-	if stillLive {
-		active.engine.AdoptUserCA(current, nil)
-		f.mu.Lock()
-		stillLive = f.runtime == active
-		f.mu.Unlock()
-		if stillLive {
-			f.scheduleUserCADeadline(active, current)
-		}
-	}
-	f.mu.Lock()
-	f.userCAState = current
-	f.userCAAssessmentErr = nil
 	f.userCACleanupIssue = nil
 	f.mu.Unlock()
-	return InstallResult{
-		Kind:               InstallResultInstalled,
-		InstalledCAExpires: current.ExpiresAt,
-	}, nil
+	return InstallResult{Kind: InstallResultInstalled, InstalledCAExpires: current.ExpiresAt}, nil
 }
 
 func (f *lifecycle) Uninstall(ctx context.Context) (UninstallResult, error) {
@@ -969,7 +451,7 @@ func (f *lifecycle) UninstallWithConsent(ctx context.Context, consentFingerprint
 		return UninstallResult{Kind: UninstallResultAlreadyMutating}, nil
 	}
 	f.mu.Lock()
-	if f.ownerEnding || f.startMutating {
+	if f.ownerEnding || f.start != nil {
 		ending := f.ownerEnding
 		f.mu.Unlock()
 		f.caAdmissionMu.Unlock()
@@ -978,75 +460,47 @@ func (f *lifecycle) UninstallWithConsent(ctx context.Context, consentFingerprint
 		}
 		return UninstallResult{Kind: UninstallResultAlreadyMutating}, nil
 	}
+	f.caMutating = true
+	f.mu.Unlock()
+	defer f.finishCAMutation()
+	f.changeMu.Lock()
+	defer f.changeMu.Unlock()
+	// Check consent against the projection this operation will withdraw, after
+	// any preceding source publication and delivery have settled.
+	f.mu.Lock()
 	active := f.runtime
 	if active != nil && active.engine.interceptionActive() {
 		expected := f.uninstallConsentFingerprint(active)
 		if consentFingerprint != expected {
 			f.mu.Unlock()
-			f.caAdmissionMu.Unlock()
-			return UninstallResult{
-				Kind:               UninstallResultConsentRequired,
-				ConsentFingerprint: expected,
-			}, nil
+			return UninstallResult{Kind: UninstallResultConsentRequired, ConsentFingerprint: expected}, nil
 		}
 	}
-	f.caMutating = true
 	f.mu.Unlock()
-	defer f.finishCAMutation(active)
-	if active != nil {
-		active.engine.AdoptUserCA(userCAState{}, nil)
-		f.cancelUserCADeadline(active)
-	}
-	err := f.userCA.Uninstall(context.Background())
+	ownerCtx := context.Background()
+	f.adoptUserCA(ownerCtx, userCAState{}, nil)
+	err := f.userCA.Uninstall(ownerCtx)
+	f.adoptUserCA(ownerCtx, userCAState{}, err)
+	var cleanupIssue *UserCACleanupIssue
 	if err != nil {
-		if active != nil {
-			active.engine.AdoptUserCA(userCAState{}, err)
-		}
-		cleanupIssue := &UserCACleanupIssue{
-			Cause:  err.Error(),
-			Action: "Run `seamless-cors uninstall` again.",
-		}
-		f.mu.Lock()
-		f.userCAState = userCAState{}
-		f.userCAAssessmentErr = err
-		f.userCACleanupIssue = cleanupIssue
-		f.mu.Unlock()
-		return UninstallResult{
-			Kind:         UninstallResultIncomplete,
-			CleanupIssue: cleanupIssue,
-		}, nil
+		cleanupIssue = &UserCACleanupIssue{Cause: err.Error(), Action: "Run `seamless-cors uninstall` again."}
 	}
 	f.mu.Lock()
-	f.userCAState = userCAState{}
-	f.userCAAssessmentErr = nil
-	f.userCACleanupIssue = nil
+	f.userCACleanupIssue = cleanupIssue
 	f.mu.Unlock()
+	if err != nil {
+		return UninstallResult{Kind: UninstallResultIncomplete, CleanupIssue: cleanupIssue}, nil
+	}
 	return UninstallResult{Kind: UninstallResultUninstalled}, nil
 }
 
 func (f *lifecycle) uninstallConsentFingerprint(active *activeRuntime) string {
-	state := active.engine.snapshot()
-	sum := sha256.Sum256([]byte(state.ProxyListen + "\x00" + state.PACListen + "\x00uninstall-all-usercas"))
+	sum := sha256.Sum256([]byte(active.engine.listeners[0].Addr().String() + "\x00" + active.engine.PACListen() + "\x00uninstall-all-usercas"))
 	return hex.EncodeToString(sum[:])
 }
 
-// watchRuntimeChanges coordinates independent runtime requests.
-func (f *lifecycle) watchRuntimeChanges(ctx context.Context, active *activeRuntime) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-active.engine.DeliveryRequests():
-			_, _ = f.deliverSystemPAC(ctx, active)
-		case <-active.engine.UserCAAssessmentRequests():
-			f.requestUserCAAssessment(active)
-		}
-	}
-}
-
+// deliverSystemPAC is a sequential phase of an operation holding changeMu.
 func (f *lifecycle) deliverSystemPAC(ctx context.Context, active *activeRuntime) (SystemPACReport, bool) {
-	f.deliveryMu.Lock()
-	defer f.deliveryMu.Unlock()
 	f.mu.Lock()
 	admitted := !f.ownerEnding && f.runtime == active
 	f.mu.Unlock()
@@ -1056,12 +510,9 @@ func (f *lifecycle) deliverSystemPAC(ctx context.Context, active *activeRuntime)
 	endpoint := active.engine.PACListen()
 	deliveryErr := f.systemPAC.Deliver(ctx, endpoint)
 	observation, inspectionErr := f.systemPAC.Inspect(ctx)
-	err := errors.Join(deliveryErr, inspectionErr)
-	report := systemPACReport(observation, endpoint, err)
+	report := systemPACReport(observation, endpoint, errors.Join(deliveryErr, inspectionErr))
 	f.mu.Lock()
-	if f.runtime == active && !f.ownerEnding {
-		active.latestPACDelivery = &report
-	}
+	active.latestPACDelivery = &report
 	f.mu.Unlock()
 	return report, true
 }
@@ -1075,11 +526,10 @@ func trafficStatus(state runtimeState, routingReady bool) TrafficStatusDetail {
 	httpsActive := routingReady && state.ServedHTTPSCORS && state.UserCAUsable && state.UserCAIdentityMatches
 	facadeActive := routingReady && state.ServedHTTPSFacade && state.UserCAUsable && state.UserCAIdentityMatches
 	return TrafficStatusDetail{
-		RoutingReady:      routingReady,
-		ProjectionCurrent: state.TrafficProjectionCurrent,
-		HTTPCORS:          featureState(httpActive, state.HTTPDemand),
-		HTTPSCORS:         featureState(httpsActive, state.HTTPSDemand),
-		HTTPSFacade:       featureState(facadeActive, false),
+		RoutingReady: routingReady,
+		HTTPCORS:     featureState(httpActive, state.HTTPDemand),
+		HTTPSCORS:    featureState(httpsActive, state.HTTPSDemand),
+		HTTPSFacade:  featureState(facadeActive, false),
 	}
 }
 

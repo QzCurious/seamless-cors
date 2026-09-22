@@ -8,7 +8,7 @@ import (
 
 func TestLiveTrafficProjectionServesPACFromCurrentProjection(t *testing.T) {
 	handler := newLiveTrafficProjection()
-	handler.Store(&servedTrafficProjection{pacContent: "latest PAC", proxy: http.NotFoundHandler()})
+	handler.Store(&servedTrafficProjection{trafficProjectionSemantics: trafficProjectionSemantics{pacContent: "latest PAC"}, proxy: http.NotFoundHandler()})
 
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/seamless-cors.pac", nil)
 	response := httptest.NewRecorder()

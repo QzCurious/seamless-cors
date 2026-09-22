@@ -6,8 +6,8 @@ import (
 )
 
 type servedTrafficProjection struct {
-	pacContent string
-	proxy      http.Handler
+	trafficProjectionSemantics
+	proxy http.Handler
 }
 
 type liveTrafficProjection struct {

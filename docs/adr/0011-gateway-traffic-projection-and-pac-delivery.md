@@ -1,5 +1,7 @@
 # Gateway traffic projection and PAC delivery
 
+The Start lifetime, retained Gateway state ownership, and projection/delivery coordination described here are updated by [ADR-0013](./0013-sequential-gateway-lifecycle.md). Unaffected domain and module contracts remain in force.
+
 The Managed PAC delivery, observation, and Traffic Routing Ready integration in this decision are superseded by [ADR-0012](./0012-dynamic-system-pac-lifecycle.md). Gateway still owns coherent Traffic Projection switching and requests delivery only after an effective switch, but System PAC now discovers the eligible service scope per request and returns facts and concrete errors for Gateway-owned reporting.
 
 This decision supersedes the Managed PAC publication model in ADR-0002, the transition-based publication policy in ADR-0003, the independent Proxy-generation and PAC ordering in ADR-0005, and the independently published live HTTPS Facade projection in ADR-0010. Their unaffected ownership, parsing, routing-specificity, forwarding, cleanup, and platform-boundary decisions remain in force.

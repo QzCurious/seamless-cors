@@ -45,6 +45,7 @@ func TestSuperviseOwnerCancelsPendingActivationOnCallerCancellation(t *testing.T
 			make(chan struct{}),
 			make(chan error),
 			make(chan error),
+			nil,
 		)
 	}()
 
@@ -74,6 +75,7 @@ func TestSuperviseOwnerCancelsPendingActivationAndPropagatesFatalError(t *testin
 			make(chan struct{}),
 			fatal,
 			make(chan error),
+			nil,
 		)
 	}()
 
@@ -101,6 +103,7 @@ func TestSuperviseOwnerContinuesAfterActivationCompletes(t *testing.T) {
 			make(chan struct{}),
 			make(chan error),
 			make(chan error),
+			nil,
 		)
 	}()
 

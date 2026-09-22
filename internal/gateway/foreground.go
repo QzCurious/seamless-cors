@@ -76,7 +76,7 @@ func (o *owner) Run(ctx context.Context, afterPublish func(context.Context) erro
 		return err
 	}
 	defer o.coord.RemoveOwned(o.cache)
-	event := superviseOwner(ctx, afterPublish, o.router.ShutdownRequested(), o.lifecycle.FatalRuntimeErrors(), errs)
+	event := superviseOwner(ctx, afterPublish, o.router.ShutdownRequested(), o.lifecycle.FatalRuntimeErrors(), errs, o.lifecycle.beginStop)
 	switch event.kind {
 	case ownerEventContextDone:
 		return o.stopAndClose(event.err)
@@ -147,6 +147,7 @@ func superviseOwner(
 	shutdownRequested <-chan struct{},
 	fatalRuntimeErrors <-chan error,
 	routerErrors <-chan error,
+	beginStop func(),
 ) ownerEvent {
 	activationCtx, cancelActivation := context.WithCancel(ctx)
 	defer cancelActivation()
@@ -161,35 +162,36 @@ func superviseOwner(
 	}
 
 	for {
+		var event ownerEvent
 		select {
 		case err := <-activationDone:
 			activationDone = nil
 			if ctx.Err() != nil {
-				return ownerEvent{kind: ownerEventContextDone}
-			}
-			if err != nil {
+				event = ownerEvent{kind: ownerEventContextDone}
+			} else if err != nil {
 				return ownerEvent{kind: ownerEventActivationFailed, err: err}
+			} else {
+				continue
 			}
 		case <-ctx.Done():
-			cancelAndWait(cancelActivation, activationDone)
-			return ownerEvent{kind: ownerEventContextDone}
+			event = ownerEvent{kind: ownerEventContextDone}
 		case <-shutdownRequested:
-			cancelAndWait(cancelActivation, activationDone)
-			return ownerEvent{kind: ownerEventShutdownRequested}
+			event = ownerEvent{kind: ownerEventShutdownRequested}
 		case err := <-fatalRuntimeErrors:
-			cancelAndWait(cancelActivation, activationDone)
-			return ownerEvent{kind: ownerEventFatalRuntime, err: err}
+			event = ownerEvent{kind: ownerEventFatalRuntime, err: err}
 		case err := <-routerErrors:
-			cancelAndWait(cancelActivation, activationDone)
-			return ownerEvent{kind: ownerEventRouterStopped, err: err}
+			event = ownerEvent{kind: ownerEventRouterStopped, err: err}
 		}
-	}
-}
-
-func cancelAndWait(cancel context.CancelFunc, activationDone <-chan error) {
-	cancel()
-	if activationDone != nil {
-		<-activationDone
+		// Accepted Start belongs to the owner. Begin Stop before waiting for it;
+		// cancellation of the callback alone only ends pre-acceptance work.
+		if beginStop != nil {
+			beginStop()
+		}
+		cancelActivation()
+		if activationDone != nil {
+			<-activationDone
+		}
+		return event
 	}
 }
 

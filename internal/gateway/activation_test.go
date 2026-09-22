@@ -100,12 +100,16 @@ func TestRepeatedStartMakesDistinctDeliveryWithoutReplacingRuntime(t *testing.T)
 	if _, err := lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: t.TempDir()}); err != nil {
 		t.Fatal(err)
 	}
-	before := lifecycle.runtime.engine.snapshot()
+	lifecycle.mu.Lock()
+	before := lifecycle.runtimeStateLocked(lifecycle.runtime)
+	lifecycle.mu.Unlock()
 	result, err := lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	after := lifecycle.runtime.engine.snapshot()
+	lifecycle.mu.Lock()
+	after := lifecycle.runtimeStateLocked(lifecycle.runtime)
+	lifecycle.mu.Unlock()
 	if _, ok := result.(AlreadyRunning); !ok || settings.applied != 2 {
 		t.Fatalf("result/applied = %#v / %d", result, settings.applied)
 	}
@@ -179,15 +183,10 @@ func TestInstallSwitchesActiveRuntimeToMatchingUserCAProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeTrafficTestRuntime(runtime)
-	drainRuntimeDeliveries(t, runtime)
 	installed := testUserCAState(t, time.Now().Add(24*time.Hour), false)
 	ca := &fakeUserCA{installState: installed}
-	lifecycle, err := newLifecycle(&lifecycleTestSystemSettings{}, ca, newCoordinator(t.TempDir()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	active := &activeRuntime{engine: runtime, ctx: context.Background(), phase: runtimePhaseRunning}
-	lifecycle.runtime = active
+	lifecycle := runtime.lifecycle
+	lifecycle.userCA = ca
 
 	result, err := lifecycle.Install(context.Background())
 	if err != nil {
@@ -205,7 +204,6 @@ func TestInstallWithdrawsHTTPSBeforeUserCAMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeTrafficTestRuntime(runtime)
-	drainRuntimeDeliveries(t, runtime)
 	current := testUserCAState(t, time.Now().Add(24*time.Hour), false)
 	runtime.AdoptUserCA(current, nil)
 	withdrawn := false
@@ -213,11 +211,8 @@ func TestInstallWithdrawsHTTPSBeforeUserCAMutation(t *testing.T) {
 		withdrawn = !runtime.snapshot().ServedHTTPSCORS
 		return current, nil
 	}}
-	lifecycle, err := newLifecycle(&lifecycleTestSystemSettings{}, ca, newCoordinator(t.TempDir()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	lifecycle.runtime = &activeRuntime{engine: runtime, ctx: context.Background(), phase: runtimePhaseRunning}
+	lifecycle := runtime.lifecycle
+	lifecycle.userCA = ca
 	if _, err := lifecycle.Install(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -232,19 +227,13 @@ func TestUserCADeadlineInvalidatesServedHTTPSBeforeReassessment(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeTrafficTestRuntime(runtime)
-	drainRuntimeDeliveries(t, runtime)
 	current := testUserCAState(t, time.Now().Add(time.Hour), false)
 	runtime.AdoptUserCA(current, nil)
 	ca := &fakeUserCA{}
-	lifecycle, err := newLifecycle(&lifecycleTestSystemSettings{}, ca, newCoordinator(t.TempDir()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	active := &activeRuntime{engine: runtime, ctx: context.Background(), phase: runtimePhaseRunning}
-	lifecycle.runtime = active
-	lifecycle.userCAState = current
+	lifecycle := runtime.lifecycle
+	lifecycle.userCA = ca
 
-	lifecycle.handleUserCADeadline(active, runtime.snapshot().UserCARevision)
+	lifecycle.handleUserCADeadline(runtime.active, lifecycle.userCARevision)
 	if runtime.snapshot().ServedHTTPSCORS {
 		t.Fatal("expired UserCA left HTTPS routes served")
 	}
@@ -267,21 +256,6 @@ func TestInstallUsesOnlyUserCAAndDoesNotCreateUpstreamList(t *testing.T) {
 }
 
 func fileContents(value string) fileobservation.Contents { return fileobservation.Contents(value) }
-
-func drainRuntimeDeliveries(t *testing.T, runtime *trafficRuntime) {
-	t.Helper()
-	stop := make(chan struct{})
-	t.Cleanup(func() { close(stop) })
-	go func() {
-		for {
-			select {
-			case <-runtime.DeliveryRequests():
-			case <-stop:
-				return
-			}
-		}
-	}()
-}
 
 type fakeUserCA struct {
 	mu             sync.Mutex

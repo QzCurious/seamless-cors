@@ -7,135 +7,110 @@ import (
 	"github.com/QzCurious/seamless-cors/internal/lib/fileobservation"
 )
 
-type startSequence struct {
-	lifecycle *lifecycle
-}
-
-// Execute runs the Start Sequence. UserCA inspection is read-only; trust
-// installation remains an explicit lifecycle command.
-func (s startSequence) Execute(ctx context.Context, request StartRequest) (result StartResult, resultErr error) {
+// activate completes an accepted Start on the owner's cancellation context.
+func (f *lifecycle) activate(ctx context.Context, directoryPath string, create bool) (result StartResult, resultErr error) {
 	var creationErr error
+	if create {
+		creationErr = createUpstreamList(f.globalUpstreamListPath)
+	}
 	defer func() {
 		if creationErr != nil && result != nil {
 			result = withUpstreamListCreationWarning(result, creationErr)
 		}
 	}()
 
-	globalUpstreamListPath := s.lifecycle.globalUpstreamListPath
-	directoryListPath, err := directoryUpstreamListPath(request.WorkingDirectory)
-	if err != nil {
-		return nil, err
+	// Establish source and CA facts before publishing any traffic.
+	inputs := []runtimeUpstreamListInput{
+		{kind: UpstreamListSourceGlobal, path: f.globalUpstreamListPath},
+		{kind: UpstreamListSourceDirectory, path: directoryPath, optional: true},
 	}
-	create, creationResult, err := authorizeUpstreamListCreation(globalUpstreamListPath, request)
-	if err != nil || creationResult != nil {
-		return creationResult, err
-	}
-	if create {
-		creationErr = createUpstreamList(globalUpstreamListPath)
-	}
-	postStartFailure := func(err error) (StartResult, error) {
-		if ctx.Err() != nil {
-			return StartStopCancelled{}, nil
-		}
-		return nil, fmt.Errorf("start runtime: %w", err)
-	}
-
-	globalObservation := fileobservation.Open(globalUpstreamListPath)
-	directoryObservation := fileobservation.Open(directoryListPath)
-	closeUpstreamListObservations := true
+	sources := make([]runtimeUpstreamListSource, 0, len(inputs))
+	observationsOwned := false
 	defer func() {
-		if closeUpstreamListObservations {
-			globalObservation.Close()
-			directoryObservation.Close()
+		if !observationsOwned {
+			for _, input := range inputs {
+				if input.observation != nil {
+					input.observation.Close()
+				}
+			}
 		}
 	}()
-	initialGlobalOutcome := <-globalObservation.Outcomes()
-	initialDirectoryOutcome := <-directoryObservation.Outcomes()
-	if !s.lifecycle.caAdmissionMu.TryLock() {
-		return StartAlreadyMutating{}, nil
+	for index := range inputs {
+		input := &inputs[index]
+		input.observation = fileobservation.Open(input.path)
+		select {
+		case input.initial = <-input.observation.Outcomes():
+		case <-ctx.Done():
+			return StartStopCancelled{}, nil
+		}
+		source, err := initialRuntimeUpstreamListSource(*input)
+		if err != nil {
+			return nil, err
+		}
+		sources = append(sources, source)
 	}
-	userCA, userCAAssessmentErr := s.lifecycle.userCA.Inspect(ctx)
-	s.lifecycle.caAdmissionMu.Unlock()
+	f.caAdmissionMu.Lock()
+	current, assessmentErr := f.userCA.Inspect(ctx)
+	f.caAdmissionMu.Unlock()
 	if ctx.Err() != nil {
 		return StartStopCancelled{}, nil
 	}
-	s.lifecycle.mu.Lock()
-	s.lifecycle.userCAState = userCA
-	s.lifecycle.userCAAssessmentErr = userCAAssessmentErr
-	s.lifecycle.mu.Unlock()
-
-	engine, err := newRuntimeFromSources([]runtimeUpstreamListInput{
-		{
-			kind:        UpstreamListSourceGlobal,
-			path:        globalUpstreamListPath,
-			observation: globalObservation,
-			initial:     initialGlobalOutcome,
-		},
-		{
-			kind:        UpstreamListSourceDirectory,
-			path:        directoryListPath,
-			optional:    true,
-			observation: directoryObservation,
-			initial:     initialDirectoryOutcome,
-		},
-	}, defaultProxyTransport(), userCA, userCAAssessmentErr)
+	engine, err := newTrafficRuntime(defaultProxyTransport())
 	if err != nil {
-		return postStartFailure(err)
+		return nil, fmt.Errorf("start runtime: %w", err)
 	}
-	closeUpstreamListObservations = false
-	cleanupEngine := true
+	runCtx, cancel := context.WithCancel(context.Background())
+	active := &activeRuntime{engine: engine, ctx: runCtx, cancel: cancel, phase: runtimePhaseStarting, upstreamLists: sources}
+
+	f.mu.Lock()
+	if f.ownerEnding || ctx.Err() != nil {
+		f.mu.Unlock()
+		cancel()
+		_ = engine.Close()
+		return StartStopCancelled{}, nil
+	}
+	f.userCAState = current
+	f.userCAAssessmentErr = assessmentErr
+	f.userCARevision++
+	f.runtime = active
+	f.publishTrafficLocked(active)
+	f.mu.Unlock()
+	observationsOwned = true
+	started := false
 	defer func() {
-		if cleanupEngine {
+		if started {
+			return
+		}
+		f.mu.Lock()
+		// Stop owns cleanup once ending begins, including traffic that is already
+		// serving during a cancelled initial PAC delivery.
+		ending := f.ownerEnding
+		if !ending && f.runtime == active {
+			f.runtime = nil
+			if f.deadlineTimer != nil {
+				f.deadlineTimer.Stop()
+				f.deadlineTimer = nil
+			}
+		}
+		f.mu.Unlock()
+		if !ending {
+			cancel()
 			_ = engine.Close()
+			for _, source := range sources {
+				source.observation.Close()
+			}
 		}
 	}()
-	runCtx, cancel := context.WithCancel(ctx)
-	done := make(chan error, 1)
-	active := &activeRuntime{
-		engine: engine,
-		ctx:    runCtx,
-		cancel: cancel,
-		done:   done,
-		phase:  runtimePhaseStarting,
-	}
 
-	publishRuntime := func() error {
-		s.lifecycle.mu.Lock()
-		defer s.lifecycle.mu.Unlock()
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		s.lifecycle.runtime = active
-		if userCAAssessmentErr == nil && userCA.Usable {
-			s.lifecycle.scheduleUserCADeadlineLocked(active, userCA)
-		}
-		return nil
-	}
-	publishErr := publishRuntime()
-	if publishErr != nil {
-		if ctx.Err() != nil {
-			return StartStopCancelled{}, nil
-		}
-		return postStartFailure(publishErr)
-	}
-	withdraw := func() {
-		s.lifecycle.mu.Lock()
-		if s.lifecycle.runtime == active {
-			s.lifecycle.runtime = nil
-		}
-		s.lifecycle.mu.Unlock()
-		s.lifecycle.cancelUserCADeadline(active)
-		cancel()
-	}
-
-	// Traffic listeners begin serving before OS PAC state can point at them.
+	// Traffic must serve before OS PAC settings can point at it.
 	ready := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
 		err := engine.ServeReady(runCtx, ready)
 		done <- err
 		if err != nil {
 			select {
-			case s.lifecycle.fatal <- err:
+			case f.fatal <- err:
 			default:
 			}
 		}
@@ -143,53 +118,38 @@ func (s startSequence) Execute(ctx context.Context, request StartRequest) (resul
 	select {
 	case <-ready:
 	case err := <-done:
-		withdraw()
-		return postStartFailure(fmt.Errorf("gateway runtime failed before readiness: %w", err))
+		return nil, fmt.Errorf("gateway runtime failed before readiness: %w", err)
 	case <-ctx.Done():
-		withdraw()
 		return StartStopCancelled{}, nil
 	}
 	select {
 	case err := <-done:
-		withdraw()
-		return postStartFailure(fmt.Errorf("gateway runtime failed before System PAC Delivery: %w", err))
+		return nil, fmt.Errorf("gateway runtime failed before System PAC Delivery: %w", err)
 	default:
 	}
 
-	pacReport, delivered := s.lifecycle.deliverSystemPAC(runCtx, active)
-	if !delivered {
-		withdraw()
+	f.changeMu.Lock()
+	report, delivered := f.deliverSystemPAC(ctx, active)
+	f.changeMu.Unlock()
+	f.mu.Lock()
+	if !delivered || f.ownerEnding || ctx.Err() != nil {
+		f.mu.Unlock()
 		return StartStopCancelled{}, nil
 	}
-
-	s.lifecycle.mu.Lock()
-	if s.lifecycle.runtime != active || ctx.Err() != nil {
-		s.lifecycle.mu.Unlock()
-		withdraw()
-		return StartStopCancelled{}, nil
-	}
+	f.resetUserCADeadlineLocked(active)
 	active.phase = runtimePhaseRunning
-	s.lifecycle.mu.Unlock()
-	cleanupEngine = false
-
-	go s.lifecycle.watchRuntimeChanges(runCtx, active)
-
-	state := engine.snapshot()
-	s.lifecycle.mu.Lock()
-	installedCA := installedCAStatus(
-		s.lifecycle.userCAState,
-		s.lifecycle.userCAAssessmentErr,
-		false,
-		s.lifecycle.userCACleanupIssue,
-	)
-	userCAIssue := userCAAssessmentIssue(s.lifecycle.userCAAssessmentErr)
-	s.lifecycle.mu.Unlock()
+	state := f.runtimeStateLocked(active)
+	installedCA := installedCAStatus(f.userCAState, f.userCAAssessmentErr, false, f.userCACleanupIssue)
+	issue := userCAAssessmentIssue(f.userCAAssessmentErr)
+	f.mu.Unlock()
+	started = true
+	for index := range sources {
+		go f.watchUpstreamList(active, index)
+	}
 	return Started{Guidance: StartGuidance{
-		UpstreamLists: state.UpstreamLists,
-		SystemPAC:     pacReport,
-		Traffic:       trafficStatus(state, pacReport.RoutesCurrentEndpoint),
-		InstalledCA:   installedCA,
-		UserCAIssue:   userCAIssue,
+		UpstreamLists: state.UpstreamLists, SystemPAC: report,
+		Traffic:     trafficStatus(state, report.RoutesCurrentEndpoint),
+		InstalledCA: installedCA, UserCAIssue: issue,
 	}}, nil
 }
 

@@ -466,7 +466,6 @@ func renderStatus(stdout io.Writer, result gateway.StatusResult) {
 
 func renderTrafficStatus(stdout io.Writer, status gateway.TrafficStatusDetail) {
 	fmt.Fprintf(stdout, "traffic-routing-ready: %t\n", status.RoutingReady)
-	fmt.Fprintf(stdout, "traffic-projection-current: %t\n", status.ProjectionCurrent)
 	fmt.Fprintf(stdout, "http-cors: %s\n", status.HTTPCORS)
 	fmt.Fprintf(stdout, "https-cors: %s\n", status.HTTPSCORS)
 	fmt.Fprintf(stdout, "https-facade: %s\n", status.HTTPSFacade)

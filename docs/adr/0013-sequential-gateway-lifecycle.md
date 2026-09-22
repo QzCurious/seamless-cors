@@ -1,0 +1,19 @@
+# Sequential Gateway lifecycle
+
+Status: accepted
+
+This decision simplifies Gateway ownership and coordination. It supersedes the desired-versus-served failed-switch model and Traffic Projection Current in ADR-0011, the separate UserCA assessment and PAC delivery channels in ADR-0012, and the earlier rule that CA commands never wait for System PAC Delivery. It clarifies Start lifetime in ADR-0001 and places retained source and CA state from ADR-0003 and ADR-0004 in Gateway lifecycle.
+
+Gateway accepts Start after validating its inputs and any required Upstream List Creation Consent and checking request cancellation. Before acceptance, cancellation prevents startup mutations. After acceptance, startup belongs to the owner; an HTTP disconnect or successful response does not end the runtime. Stop cancels startup, waits for it to settle, performs System PAC Cleanup while published traffic still serves, and then closes traffic. A signal in the foreground owner begins Stop before waiting for its startup callback. A signal in a client routed to another owner only stops that client's wait.
+
+Gateway lifecycle is the authoritative holder of current UserCA facts, assessment error, revision, expiry deadline, and Upstream List observations, projections, and issues. UserCA continues to derive filesystem and trust facts without retaining Gateway state. The serving engine owns listeners, HTTP servers, the outbound transport, and publication of an immutable Served Traffic Projection. Both source and CA changes use the same Gateway composition step. Already-admitted requests and connections may retain their immutable prior handler and signing material.
+
+A candidate Traffic Projection is local to composition. Valid module inputs have no recoverable composition or atomic-publication failure, so Gateway retains one Served Traffic Projection containing PAC contents, the matching proxy handler, and served traffic metadata. Semantic comparison still includes routes, interception behavior, and CA identity; selector ordering and warning-only changes update source diagnostics without triggering PAC delivery. There is no retained desired projection, `projectionCurrent` HTTP field, or `traffic-projection-current` CLI line.
+
+Each effective update is ordinary sequential code: adopt facts, publish traffic, deliver PAC, record the report. Initial Start and repeated Start also perform their own delivery. CA mutation withdraws HTTPS before trust changes and adopts the complete returned facts afterward; each effective switch gets its own delivery. Delivery errors remain nonfatal and never roll back served traffic. No delivery channel, coalescing, delivery queue, or retry worker is introduced.
+
+A sequence mutex orders publication and delivery. A short state mutex protects retained facts and is released before filesystem, trust, or PAC I/O. CA admission continues to reject competing mutations and serializes assessment with trust changes. The lock order is CA admission, sequence, state; source updates release the sequence lock before requesting reassessment. Expiry callbacks check the current runtime and CA revision before withdrawing HTTPS and reassessing.
+
+CA commands and source processing may wait for PAC work. Traffic keeps serving the current immutable projection. Status can obtain retained state during that work, although fresh System PAC inspection can wait for that module's serialization. Stop closes admission, settles accepted work, and cleans PAC before closing traffic. These deliberate sequencing costs replace the previous cross-component synchronization protocol.
+
+Gateway remains one module with operation-specific semantic results and private discovery, transport, and foreground supervision. Public result declarations are separated from lifecycle implementation for readability; no additional public packages or generic coordination framework are introduced.
