@@ -26,7 +26,7 @@ func TestRunPrintsVersion(t *testing.T) {
 func TestStartRejectsFlags(t *testing.T) {
 	var stderr bytes.Buffer
 
-	err := run([]string{"start", "--ca-trusted"}, io.Discard, &stderr, commandHandlers{
+	err := run([]string{"start", "--unknown"}, io.Discard, &stderr, commandHandlers{
 		start: func(io.Writer, io.Writer) error {
 			t.Fatal("start handler should not run")
 			return nil

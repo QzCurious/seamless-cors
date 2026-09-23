@@ -87,14 +87,6 @@ func newCoordinatorWithVerifier(runtimeDir string, ownerVerifier ownerVerifier) 
 	}
 }
 
-func (c *coordinator) RuntimeDirPath() string {
-	return c.runtimeDir
-}
-
-func (c *coordinator) StateFilePath() string {
-	return c.statePath
-}
-
 func (c *coordinator) Exists() bool {
 	_, err := os.Stat(c.statePath)
 	return err == nil
@@ -144,10 +136,6 @@ func (c *coordinator) Owns(cache stateCache) bool {
 	return current.HTTPRouterListen == cache.HTTPRouterListen && current.Token == cache.Token
 }
 
-func (c *coordinator) Write(cache stateCache) error {
-	return writeExclusive(c.statePath, cache)
-}
-
 func (c *coordinator) read() (stateCache, error) {
 	data, err := os.ReadFile(c.statePath)
 	if err != nil {
@@ -158,23 +146,6 @@ func (c *coordinator) read() (stateCache, error) {
 		return stateCache{}, err
 	}
 	return cache, nil
-}
-
-func writeExclusive(path string, cache stateCache) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(cache, "", "  ")
-	if err != nil {
-		return err
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	_, err = file.Write(data)
-	return err
 }
 
 func writeAtomicReplace(path string, cache stateCache) error {

@@ -10,7 +10,7 @@ import (
 
 func TestStopWithoutOwnerReturnsNotRunningAndRemovesStaleCache(t *testing.T) {
 	_, coord := useTestGatewayEnvironment(t)
-	if err := coord.Write(stateCache{HTTPRouterListen: "127.0.0.1:1", Token: "stale"}); err != nil {
+	if err := coord.Claim(stateCache{HTTPRouterListen: "127.0.0.1:1", Token: "stale"}); err != nil {
 		t.Fatal(err)
 	}
 	settings := &lifecycleTestSystemSettings{
@@ -142,7 +142,7 @@ func TestOwnerlessStatusReportsEveryVisibleNetworkService(t *testing.T) {
 
 func TestStopWithoutOwnerPreservesResultWhenCleanupFails(t *testing.T) {
 	_, coord := useTestGatewayEnvironment(t)
-	if err := coord.Write(stateCache{HTTPRouterListen: "127.0.0.1:1", Token: "stale"}); err != nil {
+	if err := coord.Claim(stateCache{HTTPRouterListen: "127.0.0.1:1", Token: "stale"}); err != nil {
 		t.Fatal(err)
 	}
 	settings := &lifecycleTestSystemSettings{

@@ -105,19 +105,6 @@ func TestStartRequiresWorkingDirectory(t *testing.T) {
 	}
 }
 
-func TestStartPlanRouteDoesNotExist(t *testing.T) {
-	server := newRouter("token", &fakeCommandHandler{})
-	req := httptest.NewRequest(http.MethodGet, "/start/plan", nil)
-	req.Header.Set(tokenHeader, "token")
-	rec := httptest.NewRecorder()
-
-	server.server.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("GET /start/plan returned %d, want %d", rec.Code, http.StatusNotFound)
-	}
-}
-
 func TestStartPropagatesRequestContext(t *testing.T) {
 	handler := &fakeCommandHandler{}
 	server := newRouter("token", handler)

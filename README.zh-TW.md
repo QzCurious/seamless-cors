@@ -125,7 +125,7 @@ Global Upstream List 的預設路徑如下：
 | macOS | `~/Library/Application Support/seamless-cors/upstreams.txt` |
 | Windows | `%LOCALAPPDATA%\seamless-cors\upstreams.txt` |
 
-設定 `XDG_CONFIG_HOME` 後，會改用該目錄。舊版使用的 `~/.seamless-cors/upstreams.txt` 不會被讀取，也不會自動搬移。
+設定 `XDG_CONFIG_HOME` 後，會改用該目錄。
 
 兩個檔案會分開監看，合併時不分優先順序。正規化後相同的 selector 只會生效一次。新增、修改、刪除或重新建立任一檔案時，設定都會自動更新，不必重新啟動。Directory Upstream List 的位置會在啟動時決定；若要改用其他目錄中的清單，請先停止 seamless-cors，再從該目錄重新執行 `start`。
 
@@ -180,8 +180,6 @@ Chrome 預設不會透過代理伺服器連線到 `localhost`、`*.localhost`、
 | 已安裝的 UserCA 憑證與金鑰 | XDG state 目錄 |
 | 程序鎖定與服務探索資料 | XDG runtime 目錄 |
 | Directory Upstream List | 執行 `start` 時所在的目錄 |
-
-若要從使用 `~/.seamless-cors/runtime` 的舊版本升級，請先停止舊版服務。新版不會讀取該目錄，也不會搬移其中的 lock 或 discovery 檔案；舊程序停止後，可手動移除殘留檔案。請勿同時執行新舊版本，因為兩者使用不同的 lock 路徑，可能無法正確避免重複啟動。
 
 ## 支援平台
 

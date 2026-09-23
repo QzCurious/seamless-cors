@@ -366,7 +366,7 @@ _Avoid_: Allowed Origin, caller-origin allowlist, per-request Upstream List gate
 
 **Gateway Runtime Directory**:
 The platform-native per-user XDG runtime location used by Gateway Coordination for the Gateway Ownership Lock and Gateway State Cache. It is selected once from the Gateway Coordination Environment, may be volatile, and is not persistent application data.
-_Avoid_: Gateway Coordination Home, XDG State Home, configuration directory, persistent state directory, legacy `.seamless-cors/runtime`
+_Avoid_: Gateway Coordination Home, XDG State Home, configuration directory, persistent state directory
 
 **Gateway Coordination**:
 A lifecycle behavior that owns the Gateway Ownership Lock, Gateway State Cache operations, Gateway State Verification, and Single User Instance decisions while allowing lifecycle cleanup paths to remove cache state through Gateway Footprint Cleanup.
@@ -374,7 +374,7 @@ _Avoid_: Runtime Coordination, cleanup module, process supervisor, daemon manage
 
 **Gateway Coordination Environment**:
 The Gateway process-startup environment that selects one XDG runtime location for the Gateway Ownership Lock and Gateway State Cache. Commands using a different runtime environment occupy a different coordination namespace and do not discover or contend with that owner.
-_Avoid_: cross-environment owner search, dynamic runtime relocation, legacy coordination fallback
+_Avoid_: cross-environment owner search, dynamic runtime relocation
 
 **Installed CA Storage**:
 The durable platform-native per-user application-state location for seamless-cors-owned Installed User CA material, selected by the UserCA Storage Environment and kept outside Gateway Footprint Cleanup.
@@ -514,7 +514,7 @@ _Avoid_: context-canceled error, started result, stop failure
 
 **System PAC Start Detail**:
 A surface-neutral start result reporting the initial PAC delivery outcome across every then-visible Network Service, including current foreign or unobservable services, delivery failures, whether routing currently uses this runtime's PAC Endpoint, and no-restoration cleanup behavior. It does not fix a service set or prevent Gateway Runtime startup when routing is unavailable.
-_Avoid_: legacy PAC Start Detail, service-selection UI, fixed service set, terminal routing prerequisite, foreign PAC authorization, consent payload, PAC preview, prompt text
+_Avoid_: service-selection UI, fixed service set, terminal routing prerequisite, foreign PAC authorization, consent payload, PAC preview, prompt text
 
 **System PAC Configuration Protection**:
 A System PAC safety rule where empty and marker-owned PAC settings may be changed without confirmation, while foreign and unobservable settings remain excluded rather than replaced. Because System PAC never displaces foreign configuration, routine delivery requires no user consent.
@@ -573,7 +573,7 @@ A CA lifecycle command behavior where uninstalling reports the absent postcondit
 _Avoid_: already-absent result kind, mutation-reporting uninstall outcome, missing-CA uninstall failure, forced repair before removal, noisy no-op uninstall
 
 **Complete CA Uninstall**:
-A CA lifecycle invariant where uninstall removes all seamless-cors-owned current-user CA trust and the complete Installed UserCA Pair, then reports success only after those facts are absent from the selected UserCA Storage Environment. Material in another or legacy storage environment is outside the command's discovery and cleanup scope.
+A CA lifecycle invariant where uninstall removes all seamless-cors-owned current-user CA trust and the complete Installed UserCA Pair, then reports success only after those facts are absent from the selected UserCA Storage Environment. Material in another storage environment is outside the command's discovery and cleanup scope.
 _Avoid_: cross-environment CA search, false uninstall success, trusted CA without selected-environment material
 
 **Foreground Start**:
@@ -866,13 +866,9 @@ Developer: "After I update the Upstream List, do I need to restart the gateway?"
 
 QA engineer: "No, Gateway continuously observes the file, switches each effective Traffic Projection, and asks System PAC to discover all visible Network Services and deliver its PAC URL to every safe setting."
 
-Developer: "What happens if I save an invalid config file while the gateway is running?"
+Developer: "What happens if I save invalid Upstream List contents while the gateway is running?"
 
 QA engineer: "Rejected Upstream List Contents produce an Upstream List Projection Issue while Gateway selects an Empty Upstream List, serves the resulting Traffic Projection, and continues observing for a valid correction."
-
-Developer: "What if my config still has removed listener or managed-proxy settings?"
-
-QA engineer: "Lenient Configuration Shape treats them like any other unknown settings, so they do not affect gateway behavior."
 
 Developer: "Do I need a command for every setting?"
 

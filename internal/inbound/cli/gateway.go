@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -343,24 +342,6 @@ func renderSystemPACReport(stdout io.Writer, label string, report gateway.System
 			fmt.Fprintf(stdout, "%s-issue: %s: %s: %s\n", label, issue.Kind, issue.ServiceName, issue.Cause)
 		}
 	}
-}
-
-func homeRelativePath(path string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	relative, err := filepath.Rel(home, path)
-	if err != nil {
-		return path
-	}
-	if relative == "." {
-		return "~"
-	}
-	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return path
-	}
-	return filepath.Join("~", relative)
 }
 
 func renderStopResult(stdout io.Writer, result gateway.StopResult) {

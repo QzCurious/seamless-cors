@@ -48,21 +48,6 @@ func fingerprints(records []truststore.Certificate) []string {
 
 var chmod = os.Chmod
 
-func authorityPermissionsNeedRepair(dir string, authority *authority) bool {
-	expected := map[string]os.FileMode{
-		dir:                0o700,
-		authority.certPath: 0o600,
-		authority.keyPath:  0o600,
-	}
-	for path, mode := range expected {
-		info, err := os.Stat(path)
-		if err != nil || info.Mode().Perm() != mode {
-			return true
-		}
-	}
-	return false
-}
-
 func repairAuthorityPermissions(dir string, authority *authority) error {
 	return errors.Join(
 		chmod(dir, 0o700),
