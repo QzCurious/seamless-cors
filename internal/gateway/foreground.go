@@ -39,16 +39,7 @@ func newOwner(pac systempac.Module, ca userCAModule, coord *coordinator, inspect
 		return nil, fmt.Errorf("router listener unavailable: %w", err)
 	}
 	routerListen := listener.Addr().String()
-	var lifecycle *lifecycle
-	if inspectUserCA {
-		lifecycle, err = newLifecycle(pac, ca, coord, routerListen)
-	} else {
-		lifecycle, err = newLifecycleUninspected(pac, ca, coord, routerListen)
-	}
-	if err != nil {
-		_ = listener.Close()
-		return nil, err
-	}
+	lifecycle := newLifecycleState(pac, ca, coord, routerListen, inspectUserCA)
 	cache := stateCache{HTTPRouterListen: routerListen, Token: token}
 	lifecycle.SetOwnerCache(cache)
 	router := newRouter(token, lifecycle)

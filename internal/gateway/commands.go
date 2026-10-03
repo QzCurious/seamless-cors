@@ -9,18 +9,6 @@ import (
 	"github.com/QzCurious/seamless-cors/internal/systempac"
 )
 
-// StartRouterHosted runs the Start Sequence through an existing router-only owner.
-func StartRouterHosted(ctx context.Context, request StartRequest) (StartResult, error) {
-	target, err := discover()
-	if err != nil {
-		return nil, err
-	}
-	if target.kind != targetActive {
-		return nil, fmt.Errorf("gateway owner is not running")
-	}
-	return target.client.Start(ctx, request)
-}
-
 // Stop discovers and stops the live owner, or cleans the ownerless Gateway
 // Footprint locally when no owner can be reached.
 func Stop(ctx context.Context) (StopResult, error) {
@@ -93,10 +81,7 @@ func status(ctx context.Context, pac systempac.Module, ca userCAModule) (StatusR
 		return StatusResult{Kind: StatusResultOwnerTransition}, nil
 	}
 	defer lock.Release()
-	lifecycle, err := newLifecycle(pac, ca, coord, "")
-	if err != nil {
-		return StatusResult{}, err
-	}
+	lifecycle := newLifecycle(pac, ca, coord, "")
 	return lifecycle.Status(ctx, target.kind == targetStale)
 }
 

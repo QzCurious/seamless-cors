@@ -62,11 +62,11 @@ const (
 	runtimePhaseRunning  runtimePhase = "running"
 )
 
-func newLifecycle(pac systempac.Module, ca userCAModule, coord *coordinator, routerListen string) (*lifecycle, error) {
+func newLifecycle(pac systempac.Module, ca userCAModule, coord *coordinator, routerListen string) *lifecycle {
 	return newLifecycleState(pac, ca, coord, routerListen, true)
 }
 
-func newLifecycleUninspected(pac systempac.Module, ca userCAModule, coord *coordinator, routerListen string) (*lifecycle, error) {
+func newLifecycleUninspected(pac systempac.Module, ca userCAModule, coord *coordinator, routerListen string) *lifecycle {
 	return newLifecycleState(pac, ca, coord, routerListen, false)
 }
 
@@ -76,24 +76,7 @@ func newLifecycleState(
 	coord *coordinator,
 	routerListen string,
 	inspectUserCA bool,
-) (*lifecycle, error) {
-	if coord == nil {
-		var err error
-		coord, err = defaultCoordinator()
-		if err != nil {
-			return nil, err
-		}
-	}
-	if ca == nil {
-		var err error
-		ca, err = openSystemUserCA()
-		if err != nil {
-			return nil, err
-		}
-	}
-	if pac == nil {
-		pac = openSystemPAC()
-	}
+) *lifecycle {
 	var initial userCAState
 	var assessmentErr error
 	if inspectUserCA {
@@ -108,7 +91,7 @@ func newLifecycleState(
 		globalUpstreamListPath: defaultGlobalUpstreamListPath(),
 		routerListen:           routerListen,
 		fatal:                  make(chan error, 1),
-	}, nil
+	}
 }
 
 func (f *lifecycle) FatalRuntimeErrors() <-chan error {

@@ -23,10 +23,7 @@ func TestExecuteStartComposesTrafficAndDeliversPAC(t *testing.T) {
 		services:      []systemPACTestService{{ServiceName: "Wi-Fi", Observed: true}},
 		deliverRoutes: true,
 	}
-	lifecycle, err := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifecycle := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
 	lifecycle.globalUpstreamListPath = globalPath
 
 	result, err := lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: t.TempDir()})
@@ -62,10 +59,7 @@ func TestExecuteStartKeepsRuntimeActiveWhenSystemPACDeliveryFails(t *testing.T) 
 		t.Fatal(err)
 	}
 	settings := &lifecycleTestSystemSettings{setErr: systempac.MutationError{ServiceName: "Wi-Fi", Cause: errors.New("denied")}}
-	lifecycle, err := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifecycle := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
 	lifecycle.globalUpstreamListPath = globalPath
 	result, err := lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: t.TempDir()})
 	if err != nil {
@@ -92,10 +86,7 @@ func TestRepeatedStartMakesDistinctDeliveryWithoutReplacingRuntime(t *testing.T)
 		t.Fatal(err)
 	}
 	settings := &lifecycleTestSystemSettings{}
-	lifecycle, err := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifecycle := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
 	lifecycle.globalUpstreamListPath = globalPath
 	if _, err := lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: t.TempDir()}); err != nil {
 		t.Fatal(err)
@@ -129,10 +120,7 @@ func TestExecuteStartLoadsGlobalAndDirectoryUpstreamLists(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := &lifecycleTestSystemSettings{services: []systemPACTestService{{ServiceName: "Wi-Fi", Observed: true}}}
-	lifecycle, err := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifecycle := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
 	lifecycle.globalUpstreamListPath = globalPath
 	result, err := lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: workingDirectory})
 	if err != nil {
@@ -161,10 +149,7 @@ func TestStartReportsBlockedHTTPSAndAssessmentIssue(t *testing.T) {
 		deliverRoutes: true,
 	}
 	ca := &fakeUserCA{inspectErr: errors.New("trust store unavailable")}
-	lifecycle, err := newLifecycle(settings, ca, newCoordinator(t.TempDir()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifecycle := newLifecycle(settings, ca, newCoordinator(t.TempDir()), "")
 	lifecycle.globalUpstreamListPath = globalPath
 	result, err := lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: t.TempDir()})
 	if err != nil {
@@ -241,10 +226,7 @@ func TestUserCADeadlineInvalidatesServedHTTPSBeforeReassessment(t *testing.T) {
 
 func TestInstallUsesOnlyUserCAAndDoesNotCreateUpstreamList(t *testing.T) {
 	ca := &fakeUserCA{installState: testUserCAState(t, time.Now().Add(24*time.Hour), false)}
-	lifecycle, err := newLifecycle(&lifecycleTestSystemSettings{}, ca, newCoordinator(t.TempDir()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifecycle := newLifecycle(&lifecycleTestSystemSettings{}, ca, newCoordinator(t.TempDir()), "")
 	globalPath := filepath.Join(t.TempDir(), "upstreams.txt")
 	lifecycle.globalUpstreamListPath = globalPath
 	if _, err := lifecycle.Install(context.Background()); err != nil {

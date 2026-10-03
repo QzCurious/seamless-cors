@@ -1,105 +1,216 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"io"
-	"strings"
+	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/spf13/cobra"
+
+	"github.com/QzCurious/seamless-cors/internal/gateway"
 	"github.com/QzCurious/seamless-cors/internal/version"
 )
 
-const usage = `Usage:
-  seamless-cors install
-  seamless-cors uninstall
-  seamless-cors serve
-  seamless-cors start
-  seamless-cors stop [flags]
-  seamless-cors status [flags]
-  seamless-cors version
-`
-
-// Run translates one CLI invocation into calls to the appropriate inward
-// module. It renders command failures to stderr; callers use the returned
-// error only to select a nonzero process exit status.
-func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	return run(args, stdout, stderr, commandHandlers{
-		install:   install,
-		uninstall: func(stdout, stderr io.Writer) error { return uninstall(stdin, stdout, stderr) },
-		serve:     serve,
-		start:     func(stdout, stderr io.Writer) error { return start(stdin, stdout, stderr) },
-		stop:      stop,
-		status:    runStatus,
-	})
-}
-
-type commandHandlers struct {
-	install   func(io.Writer, io.Writer) error
-	uninstall func(io.Writer, io.Writer) error
-	serve     func(io.Writer, io.Writer) error
-	start     func(io.Writer, io.Writer) error
-	stop      func(io.Writer, io.Writer) error
-	status    func(io.Writer, io.Writer) error
-}
-
-func run(args []string, stdout, stderr io.Writer, commands commandHandlers) error {
-	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
-		return fmt.Errorf("missing command")
+// NewCommand builds the terminal-facing command tree. Callers can configure
+// arguments, streams, and context through Cobra before executing it.
+func NewCommand() *cobra.Command {
+	command := &cobra.Command{
+		Use:     "seamless-cors",
+		Short:   "Test browser cross-origin behavior against configured upstreams",
+		Version: version.Current(),
+		PersistentPreRun: func(command *cobra.Command, _ []string) {
+			// Usage helps with invalid input, but not with Gateway failures.
+			command.SilenceUsage = true
+		},
 	}
+	command.AddCommand(
+		&cobra.Command{
+			Use:   "start",
+			Short: "Start browser traffic handling",
+			Long: `Start the gateway using the Global Upstream List and upstreams.txt in the
+working directory. Edit these files to configure upstreams.
 
-	switch args[0] {
-	case "install":
-		if err := rejectUnexpectedArgs(stderr, "install", args[1:]); err != nil {
-			return err
-		}
-		return reportCommandError(stderr, commands.install(stdout, stderr))
-	case "uninstall":
-		if err := rejectUnexpectedArgs(stderr, "uninstall", args[1:]); err != nil {
-			return err
-		}
-		return reportCommandError(stderr, commands.uninstall(stdout, stderr))
-	case "start":
-		if len(args[1:]) > 0 {
-			err := fmt.Errorf("start does not accept flags; edit upstreams.txt in the Global config or working directory instead")
-			fmt.Fprintln(stderr, err)
-			return err
-		}
-		return reportCommandError(stderr, commands.start(stdout, stderr))
-	case "serve":
-		if err := rejectUnexpectedArgs(stderr, "serve", args[1:]); err != nil {
-			return err
-		}
-		return reportCommandError(stderr, commands.serve(stdout, stderr))
-	case "stop":
-		return reportCommandError(stderr, commands.stop(stdout, stderr))
-	case "status":
-		return reportCommandError(stderr, commands.status(stdout, stderr))
-	case "version":
-		if err := rejectUnexpectedArgs(stderr, "version", args[1:]); err != nil {
-			return err
-		}
-		fmt.Fprintln(stdout, version.Current())
-		return nil
-	default:
-		err := fmt.Errorf("unknown command: %s", args[0])
-		fmt.Fprintln(stderr, err)
-		fmt.Fprint(stderr, usage)
-		return err
-	}
-}
-
-func rejectUnexpectedArgs(stderr io.Writer, command string, args []string) error {
-	if len(args) == 0 {
-		return nil
-	}
-	err := fmt.Errorf("%s does not accept arguments: %s", command, strings.Join(args, " "))
-	fmt.Fprintln(stderr, err)
-	return err
-}
-
-func reportCommandError(stderr io.Writer, err error) error {
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-	}
-	return err
+With no existing owner, start keeps the gateway in the foreground. With an
+existing owner, start activates its runtime or retries System PAC delivery.`,
+			Args: cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				ctx, stop := foregroundSignalContext(cmd.Context())
+				defer stop()
+				stdout := cmd.OutOrStdout()
+				stdin := cmd.InOrStdin()
+				hooks := gateway.StartHooks{
+					ConfirmUpstreamListCreation: func(ctx context.Context, detail gateway.UpstreamListCreationConsent) (bool, error) {
+						return confirmUpstreamListCreation(ctx, stdin, stdout, detail)
+					},
+					Started: func(result gateway.StartResult) { renderStartResult(stdout, result) },
+				}
+				result, err := gateway.Start(ctx, hooks)
+				if err != nil {
+					return err
+				}
+				if result == nil {
+					return errors.New("gateway start returned no result")
+				}
+				if result.Fulfillment() == gateway.CommandFulfilled {
+					return nil
+				}
+				if result.Kind() == gateway.StartResultOwnerTransition {
+					return fmt.Errorf("Gateway Ownership is transitioning; retry start")
+				}
+				if cleanup, ok := result.(gateway.StartCleanupFailed); ok {
+					return fmt.Errorf("gateway start cleanup failed: %s", cleanupFailureText(cleanup.Failures))
+				}
+				if result.Kind() == gateway.StartResultStartAlreadyMutating {
+					return fmt.Errorf("CA operation in progress; retry start")
+				}
+				return fmt.Errorf("gateway start was not fulfilled: %s", result.Kind())
+			},
+		},
+		&cobra.Command{
+			Use:   "serve",
+			Short: "Run the gateway control owner in the foreground",
+			Long: `Run the gateway control owner without starting browser traffic handling.
+Use a separate start command to activate its runtime.`,
+			Args: cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				ctx, stop := foregroundSignalContext(cmd.Context())
+				defer stop()
+				stdout := cmd.OutOrStdout()
+				ready := func() {
+					fmt.Fprintln(stdout, "gateway owner running")
+				}
+				return gateway.Serve(ctx, ready)
+			},
+		},
+		&cobra.Command{
+			Use:   "stop",
+			Short: "Stop the gateway and clean up its owned state",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				ctx, stopSignals := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+				defer stopSignals()
+				stdout := cmd.OutOrStdout()
+				result, err := gateway.Stop(ctx)
+				if err != nil {
+					return err
+				}
+				renderStopResult(stdout, result)
+				return nil
+			},
+		},
+		&cobra.Command{
+			Use:   "status",
+			Short: "Report gateway, routing, and User CA state",
+			Long: `Report current gateway, routing, and User CA state without changing it.
+Output is intended for people rather than a stable scripting interface.`,
+			Args: cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+				defer stop()
+				stdout := cmd.OutOrStdout()
+				result, err := gateway.Status(ctx)
+				if err != nil {
+					return err
+				}
+				if result.Fulfillment() == gateway.CommandUnfulfilled {
+					return fmt.Errorf("Gateway Ownership is transitioning; retry status")
+				}
+				renderStatus(stdout, result)
+				if result.State == gateway.GatewayStatusStaleCache {
+					fmt.Fprintln(stdout, "stale Gateway State Cache detected; run start or stop to clean up")
+				}
+				return nil
+			},
+		},
+		&cobra.Command{
+			Use:   "install",
+			Short: "Install, repair, or renew the current-user development CA",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+				defer stop()
+				stdout := cmd.OutOrStdout()
+				result, err := gateway.InstallCA(ctx)
+				if err != nil {
+					return err
+				}
+				renderInstallResult(stdout, result)
+				if result.Fulfillment() == gateway.CommandFulfilled {
+					return nil
+				}
+				switch result.Kind {
+				case gateway.InstallResultAlreadyMutating:
+					return fmt.Errorf("certificate operation in progress; retry install")
+				case gateway.InstallResultOwnerEnding:
+					return fmt.Errorf("Gateway owner is ending; retry install")
+				case gateway.InstallResultOwnerTransition:
+					return fmt.Errorf("Gateway Ownership is transitioning; retry install")
+				default:
+					return fmt.Errorf("gateway install was not fulfilled: %s", result.Kind)
+				}
+			},
+		},
+		&cobra.Command{
+			Use:   "uninstall",
+			Short: "Remove seamless-cors User CAs and local CA material",
+			Long: `Remove all seamless-cors User CAs and local CA material.
+Ask for confirmation when HTTPS interception is active.`,
+			Args: cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+				defer stop()
+				stdout := cmd.OutOrStdout()
+				stdin := cmd.InOrStdin()
+				result, err := gateway.UninstallCA(ctx, gateway.UninstallRequest{})
+				if err != nil {
+					return err
+				}
+				if result.Kind == gateway.UninstallResultConsentRequired {
+					fmt.Fprintln(stdout, "HTTPS interception is active. Uninstalling will disable HTTPS interception and remove every seamless-cors UserCA.")
+					fmt.Fprint(stdout, "Proceed? [y/N] ")
+					confirmed, err := readYes(ctx, stdin, false)
+					if err != nil {
+						return err
+					}
+					if !confirmed {
+						fmt.Fprintln(stdout, "Installed User CA uninstall canceled.")
+						return nil
+					}
+					result, err = gateway.UninstallCA(ctx, gateway.UninstallRequest{ConsentFingerprint: result.ConsentFingerprint})
+					if err != nil {
+						return err
+					}
+				}
+				renderUninstallResult(stdout, result)
+				if result.Fulfillment() == gateway.CommandFulfilled {
+					return nil
+				}
+				switch result.Kind {
+				case gateway.UninstallResultIncomplete:
+					return fmt.Errorf("Installed User CA removal is incomplete")
+				case gateway.UninstallResultAlreadyMutating:
+					return fmt.Errorf("certificate operation in progress; retry uninstall")
+				case gateway.UninstallResultOwnerEnding:
+					return fmt.Errorf("Gateway owner is ending; retry uninstall")
+				case gateway.UninstallResultOwnerTransition:
+					return fmt.Errorf("Gateway Ownership is transitioning; retry uninstall")
+				default:
+					return fmt.Errorf("gateway uninstall was not fulfilled: %s", result.Kind)
+				}
+			},
+		},
+		&cobra.Command{
+			Use:   "version",
+			Short: "Print the installed version",
+			Args:  cobra.NoArgs,
+			RunE: func(command *cobra.Command, _ []string) error {
+				_, err := fmt.Fprintln(command.OutOrStdout(), command.Root().Version)
+				return err
+			},
+		},
+	)
+	return command
 }

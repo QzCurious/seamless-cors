@@ -117,15 +117,19 @@ func (dto startSuccessBody) semantic() StartResult {
 }
 
 func startFailureDetailsFrom(result StartResult) startFailureDetails {
-	details := startFailureDetails{UpstreamListCreationWarning: result.UpstreamListCreationWarningDetail()}
 	switch typed := result.(type) {
 	case StartUpstreamListCreationConsentRequired:
 		consent := typed.Consent
-		details.UpstreamListCreationConsent = &consent
+		return startFailureDetails{UpstreamListCreationConsent: &consent}
+	case StartAlreadyMutating:
+		return startFailureDetails{UpstreamListCreationWarning: typed.UpstreamListCreationWarning}
+	case StartStopCancelled:
+		return startFailureDetails{UpstreamListCreationWarning: typed.UpstreamListCreationWarning}
 	case StartCleanupFailed:
-		details.CleanupFailures = typed.Failures
+		return startFailureDetails{CleanupFailures: typed.Failures, UpstreamListCreationWarning: typed.UpstreamListCreationWarning}
+	default:
+		return startFailureDetails{}
 	}
-	return details
 }
 
 func (dto startFailureDetails) semantic(kind StartKind) StartResult {

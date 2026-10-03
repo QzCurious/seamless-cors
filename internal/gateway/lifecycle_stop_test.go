@@ -66,10 +66,7 @@ func TestStopCleansSystemPACWhileRuntimeServesAndRemainsFulfilledOnFailure(t *te
 	go func() { done <- runtime.ServeReady(ctx, ready) }()
 	<-ready
 	pac := &cleanupProbePAC{endpoint: runtime.PACListen(), err: systempac.VerificationError{ServiceName: "Wi-Fi", Cause: errors.New("verification uncertain")}}
-	lifecycle, err := newLifecycle(pac, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifecycle := newLifecycle(pac, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
 	lifecycle.runtime = &activeRuntime{engine: runtime.trafficRuntime, ctx: ctx, cancel: cancel, phase: runtimePhaseRunning}
 
 	result, err := lifecycle.Stop(context.Background())
@@ -95,10 +92,7 @@ func TestStopQuiescesAdmittedDeliveryAndRejectsLaterDelivery(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	pac := &quiescingPAC{deliverEntered: make(chan struct{}), releaseDeliver: make(chan struct{}), cleanupEntered: make(chan struct{})}
-	lifecycle, err := newLifecycle(pac, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifecycle := newLifecycle(pac, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
 	active := &activeRuntime{engine: runtime.trafficRuntime, ctx: ctx, cancel: cancel, phase: runtimePhaseRunning}
 	lifecycle.runtime = active
 	deliveryDone := make(chan struct{})

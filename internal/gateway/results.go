@@ -34,7 +34,6 @@ type StartRequest struct {
 type StartResult interface {
 	Kind() StartKind
 	Fulfillment() CommandFulfillment
-	UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail
 	startResult()
 }
 
@@ -100,24 +99,15 @@ func startFulfillment(kind StartKind) CommandFulfillment {
 
 func (Started) Kind() StartKind                 { return StartResultStarted }
 func (Started) Fulfillment() CommandFulfillment { return startFulfillment(StartResultStarted) }
-func (r Started) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return r.UpstreamListCreationWarning
-}
-func (Started) startResult()           {}
-func (AlreadyRunning) Kind() StartKind { return StartResultAlreadyRunning }
+func (Started) startResult()                    {}
+func (AlreadyRunning) Kind() StartKind          { return StartResultAlreadyRunning }
 func (AlreadyRunning) Fulfillment() CommandFulfillment {
 	return startFulfillment(StartResultAlreadyRunning)
-}
-func (AlreadyRunning) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return nil
 }
 func (AlreadyRunning) startResult()          {}
 func (StartOwnerTransition) Kind() StartKind { return StartResultOwnerTransition }
 func (StartOwnerTransition) Fulfillment() CommandFulfillment {
 	return startFulfillment(StartResultOwnerTransition)
-}
-func (StartOwnerTransition) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return nil
 }
 func (StartOwnerTransition) startResult() {}
 func (StartUpstreamListCreationConsentRequired) Kind() StartKind {
@@ -126,32 +116,20 @@ func (StartUpstreamListCreationConsentRequired) Kind() StartKind {
 func (StartUpstreamListCreationConsentRequired) Fulfillment() CommandFulfillment {
 	return CommandUnfulfilled
 }
-func (StartUpstreamListCreationConsentRequired) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return nil
-}
 func (StartUpstreamListCreationConsentRequired) startResult() {}
 func (StartAlreadyMutating) Kind() StartKind                  { return StartResultStartAlreadyMutating }
 func (StartAlreadyMutating) Fulfillment() CommandFulfillment {
 	return startFulfillment(StartResultStartAlreadyMutating)
-}
-func (r StartAlreadyMutating) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return r.UpstreamListCreationWarning
 }
 func (StartAlreadyMutating) startResult()  {}
 func (StartStopCancelled) Kind() StartKind { return StartResultStopCancelled }
 func (StartStopCancelled) Fulfillment() CommandFulfillment {
 	return startFulfillment(StartResultStopCancelled)
 }
-func (r StartStopCancelled) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return r.UpstreamListCreationWarning
-}
 func (StartStopCancelled) startResult()    {}
 func (StartCleanupFailed) Kind() StartKind { return StartResultCleanupFailed }
 func (StartCleanupFailed) Fulfillment() CommandFulfillment {
 	return startFulfillment(StartResultCleanupFailed)
-}
-func (r StartCleanupFailed) UpstreamListCreationWarningDetail() *UpstreamListCreationWarningDetail {
-	return r.UpstreamListCreationWarning
 }
 func (StartCleanupFailed) startResult() {}
 

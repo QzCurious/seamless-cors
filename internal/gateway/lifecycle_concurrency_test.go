@@ -85,10 +85,7 @@ func TestHTTPStartOutlivesItsRequest(t *testing.T) {
 					return userCAState{}, ctx.Err()
 				}
 			}}
-			owner, err := newLifecycleUninspected(callbackPAC{}, ca, newCoordinator(t.TempDir()), "")
-			if err != nil {
-				t.Fatal(err)
-			}
+			owner := newLifecycleUninspected(callbackPAC{}, ca, newCoordinator(t.TempDir()), "")
 			owner.globalUpstreamListPath = filepath.Join(t.TempDir(), "upstreams.txt")
 			writeTrafficTestFile(t, owner.globalUpstreamListPath, "api.example.test\n")
 			router := newRouter("token", owner)
@@ -144,10 +141,7 @@ func TestHTTPStartOutlivesItsRequest(t *testing.T) {
 
 func TestCancelledStartDoesNotCreateOrActivate(t *testing.T) {
 	ca := &fakeUserCA{}
-	owner, err := newLifecycleUninspected(callbackPAC{}, ca, newCoordinator(t.TempDir()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	owner := newLifecycleUninspected(callbackPAC{}, ca, newCoordinator(t.TempDir()), "")
 	owner.globalUpstreamListPath = filepath.Join(t.TempDir(), "upstreams.txt")
 	consent := assessUpstreamListCreation(owner.globalUpstreamListPath)
 	ctx, cancel := context.WithCancel(context.Background())

@@ -156,6 +156,23 @@ func TestStartSuccessIsBareSubjectResponse(t *testing.T) {
 	}
 }
 
+func TestStartFailurePreservesCreationWarning(t *testing.T) {
+	warning := &UpstreamListCreationWarningDetail{Cause: "directory write denied"}
+	router := newRouter("token", &fakeCommandHandler{startResult: StartStopCancelled{UpstreamListCreationWarning: warning}})
+	server := httptest.NewServer(router.server.Handler)
+	defer server.Close()
+	client := newClient(stateCache{HTTPRouterListen: server.Listener.Addr().String(), Token: "token"})
+
+	result, err := client.Start(context.Background(), StartRequest{WorkingDirectory: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, ok := result.(StartStopCancelled)
+	if !ok || cancelled.UpstreamListCreationWarning == nil || cancelled.UpstreamListCreationWarning.Cause != warning.Cause {
+		t.Fatalf("start result = %#v; want cancelled start with creation warning", result)
+	}
+}
+
 func TestOpenAPIDocumentsGatewayOwnerToken(t *testing.T) {
 	server := newRouter("token", &fakeCommandHandler{})
 	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)

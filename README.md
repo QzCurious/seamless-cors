@@ -193,6 +193,13 @@ for HTTP and 443 for HTTPS, so `https://api.example.com` and
 The same commands can be invoked through a global installation or with the
 `npx seamless-cors ...` prefix.
 
+Run `seamless-cors` or `seamless-cors --help` to see available commands, and
+`seamless-cors start --help` for command-specific help. Gateway commands accept
+no positional arguments or configuration flags; edit the Upstream Lists to
+configure upstreams. `seamless-cors --version` prints the installed version,
+and `seamless-cors completion zsh` generates shell completion for zsh (bash,
+fish, and PowerShell are also supported).
+
 | Command | Behavior |
 | ------- | -------- |
 | `seamless-cors start` | Starts the gateway in the foreground, watches both Upstream Lists, and delivers PAC to every currently eligible Network Service. A second `start` keeps the runtime and makes another delivery attempt. |
