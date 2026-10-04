@@ -1,5 +1,7 @@
 # Gateway ownership and lifecycle
 
+Foreground process modes, startup, and repeated-start behavior are updated by [ADR-0014](./0014-foreground-gateway-management.md). Unaffected contracts below remain in force.
+
 The Start lifetime, retained Gateway state ownership, and projection/delivery coordination described here are updated by [ADR-0013](./0013-sequential-gateway-lifecycle.md). Unaffected domain and module contracts remain in force.
 
 The Stop ordering and cleanup scope in this decision are superseded by [ADR-0012](./0012-dynamic-system-pac-lifecycle.md). Stop now attempts System PAC and Gateway State Cache cleanup whether it finds a start-hosted owner, a router-only owner, or no owner; a live runtime keeps its endpoints serving through System PAC cleanup.

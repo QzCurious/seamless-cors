@@ -27,11 +27,8 @@ func renderStartResult(stdout io.Writer, result gateway.StartResult) {
 	case gateway.AlreadyRunning:
 		fmt.Fprintln(stdout, "seamless-cors already running")
 	case gateway.StartCleanupFailed:
-		renderUpstreamListCreationWarning(stdout, typed.UpstreamListCreationWarning)
 		fmt.Fprintln(stdout, "seamless-cors start cleanup failed")
-	case gateway.StartAlreadyMutating:
-		renderUpstreamListCreationWarning(stdout, typed.UpstreamListCreationWarning)
-	case gateway.StartStopCancelled:
+	case gateway.StartCancelled:
 		renderUpstreamListCreationWarning(stdout, typed.UpstreamListCreationWarning)
 	}
 }
@@ -112,11 +109,6 @@ func renderStatus(stdout io.Writer, result gateway.StatusResult) {
 	switch result.State {
 	case gateway.GatewayStatusRunning:
 		fmt.Fprintln(stdout, "seamless-cors status: running")
-	case gateway.GatewayStatusStarting:
-		fmt.Fprintln(stdout, "seamless-cors status: starting")
-	case gateway.GatewayStatusRouterOnly:
-		fmt.Fprintln(stdout, "seamless-cors status: owner running")
-		fmt.Fprintln(stdout, "gateway-runtime: inactive")
 	case gateway.GatewayStatusEnding:
 		fmt.Fprintln(stdout, "seamless-cors status: owner ending")
 		fmt.Fprintln(stdout, "gateway-runtime: inactive")

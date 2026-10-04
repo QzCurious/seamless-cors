@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -87,92 +86,6 @@ func TestHealthRequiresTokenAndDoesNotCallCommandHandler(t *testing.T) {
 	}
 }
 
-func TestStartRequiresWorkingDirectory(t *testing.T) {
-	handler := &fakeCommandHandler{}
-	server := newRouter("token", handler)
-
-	req := httptest.NewRequest(http.MethodPost, "/start", nil)
-	req.Header.Set(tokenHeader, "token")
-	rec := httptest.NewRecorder()
-
-	server.server.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("start returned %d, want %d: %s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
-	}
-	if handler.startCalled {
-		t.Fatal("command handler ExecuteStart was called without a working directory")
-	}
-}
-
-func TestStartPropagatesRequestContext(t *testing.T) {
-	handler := &fakeCommandHandler{}
-	server := newRouter("token", handler)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/start", strings.NewReader(`{"workingDirectory":"/project"}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(tokenHeader, "token")
-	rec := httptest.NewRecorder()
-
-	server.server.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("start returned %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	if handler.startContext == nil {
-		t.Fatal("command handler ExecuteStart was not called")
-	}
-	if err := handler.startContext.Err(); err != context.Canceled {
-		t.Fatalf("start context err = %v, want %v", err, context.Canceled)
-	}
-}
-
-func TestStartSuccessIsBareSubjectResponse(t *testing.T) {
-	handler := &fakeCommandHandler{startResult: Started{}}
-	server := newRouter("token", handler)
-	req := httptest.NewRequest(http.MethodPost, "/start", strings.NewReader(`{"workingDirectory":"/project"}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(tokenHeader, "token")
-	rec := httptest.NewRecorder()
-
-	server.server.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("start status = %d: %s", rec.Code, rec.Body.String())
-	}
-	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if body["changed"] != true {
-		t.Fatalf("start body = %#v", body)
-	}
-	if _, exists := body["kind"]; exists {
-		t.Fatalf("start body echoed result kind: %#v", body)
-	}
-	if _, exists := body["result"]; exists {
-		t.Fatalf("start body used a success envelope: %#v", body)
-	}
-}
-
-func TestStartFailurePreservesCreationWarning(t *testing.T) {
-	warning := &UpstreamListCreationWarningDetail{Cause: "directory write denied"}
-	router := newRouter("token", &fakeCommandHandler{startResult: StartStopCancelled{UpstreamListCreationWarning: warning}})
-	server := httptest.NewServer(router.server.Handler)
-	defer server.Close()
-	client := newClient(stateCache{HTTPRouterListen: server.Listener.Addr().String(), Token: "token"})
-
-	result, err := client.Start(context.Background(), StartRequest{WorkingDirectory: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cancelled, ok := result.(StartStopCancelled)
-	if !ok || cancelled.UpstreamListCreationWarning == nil || cancelled.UpstreamListCreationWarning.Cause != warning.Cause {
-		t.Fatalf("start result = %#v; want cancelled start with creation warning", result)
-	}
-}
-
 func TestOpenAPIDocumentsGatewayOwnerToken(t *testing.T) {
 	server := newRouter("token", &fakeCommandHandler{})
 	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
@@ -211,23 +124,7 @@ func TestOpenAPIDocumentsGatewayOwnerToken(t *testing.T) {
 }
 
 type fakeCommandHandler struct {
-	startCalled  bool
 	statusCalled bool
-	startRequest StartRequest
-	startContext context.Context
-	startErr     error
-	startResult  StartResult
-}
-
-func (f *fakeCommandHandler) ExecuteStart(ctx context.Context, request StartRequest) (StartResult, error) {
-	f.startCalled = true
-	f.startRequest = request
-	f.startContext = ctx
-	result := f.startResult
-	if result == nil {
-		result = Started{}
-	}
-	return result, f.startErr
 }
 
 func (f *fakeCommandHandler) Stop(context.Context) (StopResult, error) {
@@ -236,7 +133,7 @@ func (f *fakeCommandHandler) Stop(context.Context) (StopResult, error) {
 
 func (f *fakeCommandHandler) Status(context.Context, bool) (StatusResult, error) {
 	f.statusCalled = true
-	return StatusResult{Kind: StatusResultReported, StatusReport: StatusReport{State: GatewayStatusRouterOnly}}, nil
+	return StatusResult{Kind: StatusResultReported, StatusReport: StatusReport{State: GatewayStatusRunning}}, nil
 }
 
 func (f *fakeCommandHandler) Install(context.Context) (InstallResult, error) {

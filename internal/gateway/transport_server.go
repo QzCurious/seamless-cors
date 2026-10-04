@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -13,7 +12,6 @@ import (
 )
 
 type commandHandler interface {
-	ExecuteStart(context.Context, StartRequest) (StartResult, error)
 	Stop(context.Context) (StopResult, error)
 	Status(context.Context, bool) (StatusResult, error)
 	Install(context.Context) (InstallResult, error)
@@ -21,10 +19,11 @@ type commandHandler interface {
 }
 
 type routerServer struct {
-	server     *http.Server
-	token      string
-	handler    commandHandler
-	shutdownCh chan struct{}
+	server       *http.Server
+	token        string
+	handler      commandHandler
+	shutdownCh   chan struct{}
+	shutdownOnce sync.Once
 }
 
 var configureGatewayErrorsOnce sync.Once
@@ -56,7 +55,6 @@ func (s *routerServer) ShutdownRequested() <-chan struct{} {
 }
 
 func (s *routerServer) register(api huma.API) {
-	huma.Register(api, s.commandOperation(api, http.MethodPost, "/start", "start", "Start"), s.start)
 	huma.Register(api, s.commandOperation(api, http.MethodPost, "/stop", "stop", "Stop"), s.stop)
 	huma.Register(api, s.commandOperation(api, http.MethodGet, "/status", "status", "Status"), s.status)
 	huma.Register(api, s.commandOperation(api, http.MethodPost, "/install", "install", "Install UserCA"), s.install)
@@ -100,36 +98,6 @@ func (s *routerServer) health(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-type startInput struct {
-	Body *StartRequest
-}
-
-type startOutput struct {
-	Body startSuccessBody
-}
-
-func (s *routerServer) start(ctx context.Context, input *startInput) (*startOutput, error) {
-	if input.Body == nil {
-		return nil, newRouterError(http.StatusUnprocessableEntity, "workingDirectory is required")
-	}
-	request := *input.Body
-	if _, err := directoryUpstreamListPath(request.WorkingDirectory); err != nil {
-		return nil, newRouterError(http.StatusUnprocessableEntity, "workingDirectory must be an absolute path", err)
-	}
-	result, err := s.handler.ExecuteStart(ctx, request)
-	if err != nil {
-		return nil, newRouterError(http.StatusInternalServerError, "Gateway could not produce a Start result.", err)
-	}
-	if result == nil {
-		return nil, newRouterError(http.StatusInternalServerError, "Gateway could not produce a Start result.")
-	}
-	if result.Fulfillment() == CommandUnfulfilled {
-		failure := startFailureRepresentation(result.Kind())
-		return nil, newGatewayError(failure.status, string(result.Kind()), failure.message, startFailureDetailsFrom(result))
-	}
-	return &startOutput{Body: startSuccessBodyFrom(result)}, nil
-}
-
 type stopOutput struct {
 	Body stopSuccessBody
 }
@@ -141,10 +109,6 @@ func (s *routerServer) stop(ctx context.Context, _ *struct{}) (*stopOutput, erro
 	}
 	if result.Kind == StopResultStopped {
 		s.requestShutdown()
-		go func() {
-			time.Sleep(25 * time.Millisecond)
-			_ = s.server.Close()
-		}()
 	}
 	return &stopOutput{Body: stopSuccessBodyFrom(result)}, nil
 }
@@ -201,11 +165,7 @@ func (s *routerServer) uninstall(ctx context.Context, input *uninstallInput) (*u
 }
 
 func (s *routerServer) requestShutdown() {
-	select {
-	case <-s.shutdownCh:
-	default:
-		close(s.shutdownCh)
-	}
+	s.shutdownOnce.Do(func() { close(s.shutdownCh) })
 }
 
 func gatewayRouterConfig() huma.Config {
@@ -233,23 +193,6 @@ func gatewayRouterConfig() huma.Config {
 type failureRepresentation struct {
 	status  int
 	message string
-}
-
-func startFailureRepresentation(kind StartKind) failureRepresentation {
-	switch kind {
-	case StartResultUpstreamListCreationConsentRequired:
-		return failureRepresentation{http.StatusUnprocessableEntity, "Upstream List creation consent is required."}
-	case StartResultOwnerTransition:
-		return failureRepresentation{http.StatusServiceUnavailable, "Gateway ownership is transitioning; retry Start."}
-	case StartResultStartAlreadyMutating:
-		return failureRepresentation{http.StatusConflict, "Another Gateway mutation is in progress."}
-	case StartResultStopCancelled:
-		return failureRepresentation{http.StatusConflict, "Stop cancelled the Start operation."}
-	case StartResultCleanupFailed:
-		return failureRepresentation{http.StatusInternalServerError, "Gateway cleanup did not complete."}
-	default:
-		return failureRepresentation{http.StatusInternalServerError, "Gateway Start was not fulfilled."}
-	}
 }
 
 func installFailureRepresentation(kind InstallResultKind) failureRepresentation {

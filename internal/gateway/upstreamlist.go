@@ -1,8 +1,6 @@
 package gateway
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,7 +39,6 @@ func assessUpstreamListCreation(path string) *UpstreamListCreationConsent {
 	consent := &UpstreamListCreationConsent{
 		Path:            path,
 		DefaultContents: upstreamlist.DefaultContents,
-		Fingerprint:     upstreamListCreationFingerprint(path, upstreamlist.DefaultContents),
 	}
 	for parent := filepath.Dir(path); ; parent = filepath.Dir(parent) {
 		if _, err := os.Lstat(parent); err == nil {
@@ -54,11 +51,6 @@ func assessUpstreamListCreation(path string) *UpstreamListCreationConsent {
 		}
 	}
 	return consent
-}
-
-func upstreamListCreationFingerprint(path, contents string) UpstreamListCreationFingerprint {
-	sum := sha256.Sum256([]byte(path + "\x00" + contents))
-	return UpstreamListCreationFingerprint(hex.EncodeToString(sum[:]))
 }
 
 func createUpstreamList(path string) error {

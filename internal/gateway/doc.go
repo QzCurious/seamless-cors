@@ -1,11 +1,7 @@
-// Package gateway owns the complete gateway lifecycle behind operation-specific
-// commands. Callers do not need to know whether an operation is executed in the
-// current process or forwarded to an existing foreground owner.
-//
-// The implementation is organized by responsibility inside this package:
-// discovery owns Gateway Ownership and its state cache, transport provides authenticated local
-// HTTP, foreground supervises process lifetime, lifecycle coordinates commands,
-// lifecycle retains CA and Upstream List facts and composes traffic, the start
-// sequence governs activation, and traffic serves the immutable PAC/proxy pair. Those are
-// implementation details rather than caller-visible seams.
+// Package gateway runs one foreground Gateway per coordination environment.
+// Start holds the instance lock, initializes traffic, publishes authenticated
+// local control discovery, and waits for stop, a signal, or a serving failure.
+// Status, stop, and CA commands address that process while it is running;
+// offline commands inspect or mutate local state under the same instance lock.
+// Traffic composition and OS PAC delivery remain sequential lifecycle updates.
 package gateway

@@ -12,10 +12,6 @@ import (
 	"github.com/QzCurious/seamless-cors/internal/upstreamlist"
 )
 
-var (
-	errOwnerTransition = errors.New("gateway ownership is transitioning")
-)
-
 // Lock order is CA admission, changeMu, then mu. changeMu keeps publication and
 // delivery sequential; mu protects retained facts and is never held during I/O.
 type lifecycle struct {
@@ -30,20 +26,14 @@ type lifecycle struct {
 	deadlineTimer          *time.Timer
 	coord                  *coordinator
 	globalUpstreamListPath string
-	routerListen           string
 	ownerCache             stateCache
-	start                  *startOperation
 	ownerEnding            bool
-	transientOwner         bool
 	caMutating             bool
 	runtime                *activeRuntime
 	userCACleanupIssue     *UserCACleanupIssue
 	fatal                  chan error
-}
-
-type startOperation struct {
-	cancel context.CancelFunc
-	done   chan struct{}
+	stopOnce               sync.Once
+	stopResult             StopResult
 }
 
 type activeRuntime struct {
@@ -51,63 +41,17 @@ type activeRuntime struct {
 	latestPACDelivery *SystemPACReport
 	ctx               context.Context
 	cancel            context.CancelFunc
-	phase             runtimePhase
 	upstreamLists     []runtimeUpstreamListSource
 }
 
-type runtimePhase string
-
-const (
-	runtimePhaseStarting runtimePhase = "starting"
-	runtimePhaseRunning  runtimePhase = "running"
-)
-
-func newLifecycle(pac systempac.Module, ca userCAModule, coord *coordinator, routerListen string) *lifecycle {
-	return newLifecycleState(pac, ca, coord, routerListen, true)
-}
-
-func newLifecycleUninspected(pac systempac.Module, ca userCAModule, coord *coordinator, routerListen string) *lifecycle {
-	return newLifecycleState(pac, ca, coord, routerListen, false)
-}
-
-func newLifecycleState(
-	pac systempac.Module,
-	ca userCAModule,
-	coord *coordinator,
-	routerListen string,
-	inspectUserCA bool,
-) *lifecycle {
-	var initial userCAState
-	var assessmentErr error
-	if inspectUserCA {
-		initial, assessmentErr = ca.Inspect(context.Background())
-	}
+func newLifecycle(pac systempac.Module, ca userCAModule, coord *coordinator) *lifecycle {
 	return &lifecycle{
 		systemPAC:              pac,
 		userCA:                 ca,
-		userCAState:            initial,
-		userCAAssessmentErr:    assessmentErr,
 		coord:                  coord,
 		globalUpstreamListPath: defaultGlobalUpstreamListPath(),
-		routerListen:           routerListen,
 		fatal:                  make(chan error, 1),
 	}
-}
-
-func (f *lifecycle) FatalRuntimeErrors() <-chan error {
-	return f.fatal
-}
-
-func (f *lifecycle) RuntimeActive() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.runtime != nil
-}
-
-func (f *lifecycle) SetOwnerCache(cache stateCache) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.ownerCache = cache
 }
 
 // adoptUserCA publishes the retained facts and their traffic consequences. The
@@ -140,14 +84,11 @@ func (f *lifecycle) resetUserCADeadlineLocked(active *activeRuntime) {
 	}
 }
 
-// beginStop prevents admission and cancels startup without stopping traffic.
+// beginStop prevents new updates while admitted work settles.
 func (f *lifecycle) beginStop() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ownerEnding = true
-	if f.start != nil {
-		f.start.cancel()
-	}
 	if f.deadlineTimer != nil {
 		f.deadlineTimer.Stop()
 		f.deadlineTimer = nil
@@ -189,79 +130,25 @@ func (f *lifecycle) reassessUserCA(active *activeRuntime) {
 
 func (f *lifecycle) finishCAMutation() {
 	f.mu.Lock()
-	if f.transientOwner {
-		f.ownerEnding = true
-	}
 	f.caMutating = false
 	f.mu.Unlock()
 	f.caAdmissionMu.Unlock()
 }
 
-func (f *lifecycle) ExecuteStart(ctx context.Context, request StartRequest) (StartResult, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	f.mu.Lock()
-	if f.ownerEnding {
-		f.mu.Unlock()
-		return StartStopCancelled{}, nil
-	}
-	if f.transientOwner || f.start != nil || f.caMutating {
-		f.mu.Unlock()
-		return StartAlreadyMutating{}, nil
-	}
-	if f.runtime != nil {
-		active := f.runtime
-		f.mu.Unlock()
-		f.changeMu.Lock()
-		defer f.changeMu.Unlock()
-		if _, delivered := f.deliverSystemPAC(context.Background(), active); !delivered {
-			return StartStopCancelled{}, nil
-		}
-		return AlreadyRunning{}, nil
-	}
-	// Reserve Start while validating input and consent. Acceptance happens only
-	// after these checks and a final request-cancellation check.
-	startCtx, cancel := context.WithCancel(context.Background())
-	operation := &startOperation{cancel: cancel, done: make(chan struct{})}
-	f.start = operation
-	f.mu.Unlock()
-	defer func() {
-		cancel()
-		f.mu.Lock()
-		f.start = nil
-		close(operation.done)
-		f.mu.Unlock()
-	}()
-	directoryPath, err := directoryUpstreamListPath(request.WorkingDirectory)
-	if err != nil {
-		return nil, err
-	}
-	create, result, err := authorizeUpstreamListCreation(f.globalUpstreamListPath, request)
-	if err != nil || result != nil {
-		return result, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if startCtx.Err() != nil {
-		return StartStopCancelled{}, nil
-	}
-	return f.activate(startCtx, directoryPath, create)
+// Stop runs cleanup once, including when a signal races with a CLI stop.
+func (f *lifecycle) Stop(ctx context.Context) (StopResult, error) {
+	f.stopOnce.Do(func() { f.stopResult = f.stop(ctx) })
+	return f.stopResult, nil
 }
 
-func (f *lifecycle) Stop(ctx context.Context) (StopResult, error) {
+func (f *lifecycle) stop(ctx context.Context) StopResult {
 	var warnings []CommandWarning
 	f.beginStop()
 	f.mu.Lock()
-	operation := f.start
 	active := f.runtime
 	ownerCache := f.ownerCache
 	f.mu.Unlock()
 	var cleanupFailures []CleanupFailure
-	if operation != nil {
-		<-operation.done
-	}
 	// Settle admitted CA work and every projection/delivery sequence before cleanup.
 	f.caAdmissionMu.Lock()
 	defer f.caAdmissionMu.Unlock()
@@ -298,7 +185,7 @@ func (f *lifecycle) Stop(ctx context.Context) (StopResult, error) {
 	if len(cleanupFailures) > 0 {
 		cleanupFulfillment = CommandUnfulfilled
 	}
-	return StopResult{Kind: StopResultStopped, Warnings: warnings, CleanupFulfillment: cleanupFulfillment, SystemPACCleanup: systemPACReport(cleanupObservation, "", cleanupErr), CleanupFailures: cleanupFailures}, nil
+	return StopResult{Kind: StopResultStopped, Warnings: warnings, CleanupFulfillment: cleanupFulfillment, SystemPACCleanup: systemPACReport(cleanupObservation, "", cleanupErr), CleanupFailures: cleanupFailures}
 }
 
 func (f *lifecycle) Status(ctx context.Context, stale bool) (StatusResult, error) {
@@ -311,11 +198,9 @@ func (f *lifecycle) Status(ctx context.Context, stale bool) (StatusResult, error
 	caMutating := f.caMutating
 	caCleanupIssue := f.userCACleanupIssue
 	var state runtimeState
-	var phase runtimePhase
 	var latestPACDelivery *SystemPACReport
 	if active != nil {
 		state = f.runtimeStateLocked(active)
-		phase = active.phase
 		latestPACDelivery = active.latestPACDelivery
 	}
 	f.mu.Unlock()
@@ -337,19 +222,14 @@ func (f *lifecycle) Status(ctx context.Context, stale bool) (StatusResult, error
 	}
 	if ownerEnding {
 		result.State = GatewayStatusEnding
-		if f.routerListen != "" {
-			result.Owner = &OwnerStatusDetail{RouterListen: f.routerListen}
+		if ownerCache.HTTPRouterListen != "" {
+			result.Owner = &OwnerStatusDetail{RouterListen: ownerCache.HTTPRouterListen}
 		}
 		return result, nil
 	}
 	if active != nil {
-		if phase != runtimePhaseRunning {
-			result.State = GatewayStatusStarting
-		}
-		if phase == runtimePhaseRunning {
-			result.State = GatewayStatusRunning
-		}
-		result.Owner = &OwnerStatusDetail{RouterListen: f.routerListen}
+		result.State = GatewayStatusRunning
+		result.Owner = &OwnerStatusDetail{RouterListen: ownerCache.HTTPRouterListen}
 		result.Runtime = &RuntimeStatusDetail{
 			ProxyListen:             state.ProxyListen,
 			PACListen:               state.PACListen,
@@ -360,10 +240,7 @@ func (f *lifecycle) Status(ctx context.Context, stale bool) (StatusResult, error
 		}
 		return result, nil
 	}
-	if f.routerListen != "" {
-		result.State = GatewayStatusRouterOnly
-		result.Owner = &OwnerStatusDetail{RouterListen: f.routerListen}
-	} else if stale {
+	if stale {
 		result.State = GatewayStatusStaleCache
 	}
 	return result, nil
@@ -391,14 +268,10 @@ func (f *lifecycle) Install(ctx context.Context) (InstallResult, error) {
 		return InstallResult{Kind: InstallResultAlreadyMutating}, nil
 	}
 	f.mu.Lock()
-	if f.ownerEnding || f.start != nil {
-		ending := f.ownerEnding
+	if f.ownerEnding {
 		f.mu.Unlock()
 		f.caAdmissionMu.Unlock()
-		if ending {
-			return InstallResult{Kind: InstallResultOwnerEnding}, nil
-		}
-		return InstallResult{Kind: InstallResultAlreadyMutating}, nil
+		return InstallResult{Kind: InstallResultOwnerEnding}, nil
 	}
 	f.caMutating = true
 	f.mu.Unlock()
@@ -434,14 +307,10 @@ func (f *lifecycle) UninstallWithConsent(ctx context.Context, consentFingerprint
 		return UninstallResult{Kind: UninstallResultAlreadyMutating}, nil
 	}
 	f.mu.Lock()
-	if f.ownerEnding || f.start != nil {
-		ending := f.ownerEnding
+	if f.ownerEnding {
 		f.mu.Unlock()
 		f.caAdmissionMu.Unlock()
-		if ending {
-			return UninstallResult{Kind: UninstallResultOwnerEnding}, nil
-		}
-		return UninstallResult{Kind: UninstallResultAlreadyMutating}, nil
+		return UninstallResult{Kind: UninstallResultOwnerEnding}, nil
 	}
 	f.caMutating = true
 	f.mu.Unlock()

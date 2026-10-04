@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/adrg/xdg"
+	"github.com/gofrs/flock"
 
 	"github.com/QzCurious/seamless-cors/internal/gateway"
 )
@@ -182,77 +184,6 @@ func TestUninstallRequiresConsentAndRetriesWithFingerprint(t *testing.T) {
 	}
 }
 
-func TestStartUsesCommandStreamsForConsentAndGuidance(t *testing.T) {
-	calls := 0
-	publishTestGateway(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/start" || r.Method != http.MethodPost {
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		calls++
-		var request gateway.StartRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Error(err)
-		}
-		if calls == 1 {
-			if request.UpstreamListCreationConsent != nil {
-				t.Errorf("first request already consented: %#v", request)
-			}
-			w.WriteHeader(http.StatusConflict)
-			io.WriteString(w, `{"error":{"code":"upstream-list-creation-consent-required","message":"confirmation required","details":{"upstreamListCreationConsent":{"path":"/config/upstreams.txt","fingerprint":"current-state"}}}}`)
-			return
-		}
-		if consent := request.UpstreamListCreationConsent; consent == nil || consent.Decision != gateway.UpstreamListCreationAccepted || consent.Fingerprint != "current-state" {
-			t.Errorf("retry consent = %#v", consent)
-		}
-		json.NewEncoder(w).Encode(map[string]any{"changed": true, "guidance": gateway.StartGuidance{}})
-	})
-	var out bytes.Buffer
-	if err := executeTestCommand([]string{"start"}, strings.NewReader("yes\n"), &out); err != nil {
-		t.Fatal(err)
-	}
-	if calls != 2 {
-		t.Fatalf("start requests = %d", calls)
-	}
-	for _, want := range []string{"/config/upstreams.txt", "Create it?", "seamless-cors is running."} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("output missing %q: %s", want, out.String())
-		}
-	}
-}
-
-func TestStartDoesNotConsentWhenPromptInputFails(t *testing.T) {
-	calls := 0
-	publishTestGateway(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/start" || r.Method != http.MethodPost {
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		calls++
-		if calls == 1 {
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			io.WriteString(w, `{"error":{"code":"upstream-list-creation-consent-required","message":"confirmation required","details":{"upstreamListCreationConsent":{"path":"/config/upstreams.txt","fingerprint":"current-state"}}}}`)
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{"changed": true, "guidance": gateway.StartGuidance{}})
-	})
-	readErr := errors.New("terminal input failed")
-	stdin, writer := io.Pipe()
-	defer stdin.Close()
-	if err := writer.CloseWithError(readErr); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	err := executeTestCommand([]string{"start"}, stdin, &out)
-	if !errors.Is(err, readErr) || calls != 1 {
-		t.Fatalf("start error = %v, requests = %d; want input error and no consent retry", err, calls)
-	}
-}
-
-// Publish an HTTP test owner so CLI tests use the real Gateway discovery and
-// client path without changing OS-managed state.
 func publishTestGateway(t *testing.T, handler http.HandlerFunc) {
 	t.Helper()
 	t.Cleanup(xdg.Reload)
@@ -284,5 +215,42 @@ func publishTestGateway(t *testing.T, handler http.HandlerFunc) {
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
+	}
+	lock := flock.New(filepath.Join(filepath.Dir(path), "gateway-owner.lock"))
+	if err := lock.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lock.Unlock() })
+}
+
+func TestStartReportsExistingGatewayWithoutChangingIt(t *testing.T) {
+	publishTestGateway(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("second start issued a control command: %s %s", r.Method, r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	})
+	var out bytes.Buffer
+	if err := executeTestCommand([]string{"start"}, nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "already running") {
+		t.Fatalf("start output = %q", out.String())
+	}
+}
+
+func TestStartCreationPromptUsesCommandStreamsAndPropagatesInputFailure(t *testing.T) {
+	t.Cleanup(xdg.Reload)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	xdg.Reload()
+	stdin, writer := io.Pipe()
+	defer stdin.Close()
+	readErr := errors.New("terminal input failed")
+	if err := writer.CloseWithError(readErr); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err := executeTestCommand([]string{"start"}, stdin, &out)
+	if !errors.Is(err, readErr) || !strings.Contains(out.String(), "Create it?") || !strings.Contains(out.String(), "upstreams.txt is missing:") {
+		t.Fatalf("start error/output = %v / %q", err, out.String())
 	}
 }

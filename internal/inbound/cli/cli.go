@@ -33,8 +33,8 @@ func NewCommand() *cobra.Command {
 			Long: `Start the gateway using the Global Upstream List and upstreams.txt in the
 working directory. Edit these files to configure upstreams.
 
-With no existing owner, start keeps the gateway in the foreground. With an
-existing owner, start activates its runtime or retries System PAC delivery.`,
+Start keeps the gateway in the foreground until Ctrl+C or stop. A second
+start reports that the gateway is already running without changing it.`,
 			Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				ctx, stop := foregroundSignalContext(cmd.Context())
@@ -54,6 +54,9 @@ existing owner, start activates its runtime or retries System PAC delivery.`,
 				if result == nil {
 					return errors.New("gateway start returned no result")
 				}
+				if result.Kind() != gateway.StartResultStarted && result.Kind() != gateway.StartResultAlreadyRunning {
+					renderStartResult(stdout, result)
+				}
 				if result.Fulfillment() == gateway.CommandFulfilled {
 					return nil
 				}
@@ -63,26 +66,7 @@ existing owner, start activates its runtime or retries System PAC delivery.`,
 				if cleanup, ok := result.(gateway.StartCleanupFailed); ok {
 					return fmt.Errorf("gateway start cleanup failed: %s", cleanupFailureText(cleanup.Failures))
 				}
-				if result.Kind() == gateway.StartResultStartAlreadyMutating {
-					return fmt.Errorf("CA operation in progress; retry start")
-				}
 				return fmt.Errorf("gateway start was not fulfilled: %s", result.Kind())
-			},
-		},
-		&cobra.Command{
-			Use:   "serve",
-			Short: "Run the gateway control owner in the foreground",
-			Long: `Run the gateway control owner without starting browser traffic handling.
-Use a separate start command to activate its runtime.`,
-			Args: cobra.NoArgs,
-			RunE: func(cmd *cobra.Command, _ []string) error {
-				ctx, stop := foregroundSignalContext(cmd.Context())
-				defer stop()
-				stdout := cmd.OutOrStdout()
-				ready := func() {
-					fmt.Fprintln(stdout, "gateway owner running")
-				}
-				return gateway.Serve(ctx, ready)
 			},
 		},
 		&cobra.Command{

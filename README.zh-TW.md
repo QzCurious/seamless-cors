@@ -30,7 +30,7 @@ https://api.example.com:8443
 
 `start` 會持續在目前的終端機前景執行，並暫時替適用的系統網路服務設定 PAC URL。若網路服務原本使用其他 PAC 設定，seamless-cors 會保持原狀，不會覆蓋。使用完畢後按下 `Ctrl+C`，即可停止服務，並移除 seamless-cors 加上的 PAC 設定。
 
-流量執行環境會先啟動，再進行 System PAC delivery。PAC 探索、讀取、寫入或驗證問題只會回報，不會停止已啟動的執行環境；之後有效的路由變更或再次執行 `start`，都會觸發一次新的 delivery。
+流量執行環境會先啟動，再進行 System PAC delivery。PAC 探索、讀取、寫入或驗證問題只會回報，不會停止已啟動的執行環境；之後有效的路由變更，或停止後重新啟動，都會觸發一次新的 delivery。
 
 若要處理原本就是 HTTPS 的 API，或使用 HTTPS Facade，請安裝開發用 CA，並同意作業系統顯示的授權提示：
 
@@ -144,18 +144,23 @@ Global Upstream List 的預設路徑如下：
 
 Host Selector 不能包含 protocol 或 port。Origin Selector 必須以 `http://` 或 `https://` 開頭，不支援萬用字元，也不能包含 path、query string 或 fragment。IPv4 與加上方括號的 IPv6 格式都可以使用。hostname 與 protocol 會轉成小寫；省略 port 時，HTTP 會視為 80，HTTPS 會視為 443，因此 `https://api.example.com` 和 `https://api.example.com:443` 代表同一個設定。
 
+### Gateway 管理
+
+`start` 會在前景執行一個 Gateway；每個使用者／runtime 目錄最多只能有一個實例。完成流量初始化與首次 PAC delivery 後，才會發布本機控制端點。執行期間，其他 CLI 指令可以查詢狀態、停止 Gateway，或管理 CA。Gateway 未執行時，CA 指令會直接在相同的實例鎖保護下執行。
+
+初始化或離線 CA 操作期間，其他指令會回報忙碌，請稍後重試。若要取消初始化，請在啟動 Gateway 的終端機按下 Ctrl+C。再次執行 `start` 只會回報已啟動；若要重試 PAC delivery，請變更有效路由，或先停止再重新啟動。
+
 ### 指令
 
 下列指令可透過全域安裝的版本執行，也可以加上 `npx seamless-cors ...` 前綴使用。
 
 | 指令 | 行為 |
 | ---- | ---- |
-| `seamless-cors start` | 在前景啟動服務、監看兩份 Upstream List，並向目前適用的所有 Network Service delivery PAC。若服務已在執行，再次執行 `start` 會保留原執行環境並再次嘗試 delivery。 |
+| `seamless-cors start` | 在前景啟動服務、監看兩份 Upstream List，並向目前適用的所有 Network Service delivery PAC。若服務已在執行，再次執行 `start` 只會回報服務已啟動，不會變更執行環境或 PAC 設定。 |
 | `seamless-cors stop` | 停止執行中的服務；即使找不到存活的 owner，也會盡力清理 seamless-cors 所屬的 System PAC 與暫存狀態。若清理結果不確定，命令仍會成功完成並醒目回報可能的殘留。 |
 | `seamless-cors status` | 重新觀察所有可見的 Network Service，顯示服務、代理規則、CORS、HTTPS Facade、Upstream List、System PAC 與 UserCA 的目前狀態，不會變更任何設定。保留的 delivery 診斷會標示為歷史資訊。輸出格式以方便閱讀為主，不保證能作為固定的腳本介面。 |
 | `seamless-cors install` | 安裝、修復或更新目前使用者的開發用 CA。若服務正在執行，會立即套用可用的 CA。 |
 | `seamless-cors uninstall` | 移除所有 seamless-cors UserCA 與本機 CA 資料。若 HTTPS 攔截正在運作，會先要求確認；確認後會停用 HTTPS，但 HTTP 代理仍可繼續使用。 |
-| `seamless-cors serve` | 只啟動本機控制服務，不會開始處理瀏覽器流量，也不會變更 PAC 設定；必須另外執行 `start` 才會啟用代理功能。 |
 | `seamless-cors version` | 顯示已安裝的版本。 |
 
 即使 CA 已經安裝，再次執行 `install` 也不會有問題。服務會保持執行，只會在更新 CA 的過程中短暫停用 HTTPS，並在新的 CA 可用後自動恢復。

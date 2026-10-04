@@ -9,8 +9,8 @@ A local DEV/QA network tool that sits between the browser and configured upstrea
 _Avoid_: generic proxy, CORS middleware
 
 **Gateway Module**:
-The single internal module that owns start, serve, stop, status, and Installed User CA lifecycle commands together with their semantic results, fulfillment, state classifications, and details for CLI and HTTP Gateway Control Surfaces. Its small public interface hides owner discovery, authenticated local HTTP transport, process ownership, Gateway Footprint Cleanup decisions, System PAC coordination, runtime visibility, UserCA lifecycle behavior, and traffic-runtime sequencing; Inbound Adapters translate Gateway semantics without redefining them.
-_Avoid_: surface-owned outcome, CLI result classification, HTTP-defined command semantics, Gateway Facade, gateway client package, gateway coordinator package, gateway owner package, gateway router package, command service
+The single internal module that owns foreground start, stop, status, and Installed User CA lifecycle commands. Start holds the instance lock from initialization through cleanup; live status, stop, install, and uninstall use authenticated local HTTP, while offline commands inspect or mutate local state under that same lock. Gateway owns command results, traffic-runtime sequencing, and System PAC coordination; Inbound Adapters translate its semantics.
+_Avoid_: surface-owned outcome, CLI result classification, HTTP process bootstrap, command service
 
 **Inbound Adapter**:
 An architectural role that translates an external interaction into calls through an inward module interface and translates the result back without being imported by that module. The CLI Inbound Adapter and the Gateway Router are Inbound Adapters even though they serve different Gateway Control Surfaces and live at different seams.
@@ -21,8 +21,8 @@ The terminal-facing Inbound Adapter that translates seamless-cors process argume
 _Avoid_: CLI-owned Gateway semantics, command service, composition root, Gateway-only adapter
 
 **Gateway Control Surface**:
-A user-facing interaction surface through which a Gateway Control Command is issued and its outcome is presented. CLI and authenticated local HTTP are Gateway Control Surfaces; this product role is distinct from the architectural Inbound Adapter role.
-_Avoid_: Inbound Adapter, Gateway Module interface, transport protocol
+A user-facing interaction surface through which a Gateway Control Command is issued and its outcome is presented. CLI supports every command. Authenticated local HTTP supports status, stop, install, and uninstall on an initialized foreground Gateway; startup and its creation prompt belong to the launching CLI.
+_Avoid_: Inbound Adapter, Gateway Module interface, HTTP Start command
 
 **Gateway Feature Orchestration**:
 A rule that only the Gateway Module combines module-owned facts into HTTP CORS Demand, HTTPS CORS Demand, and active traffic outcomes, then orders the required projections and mutations; feature modules never initiate another feature's lifecycle. Selector, UserCA, and routing facts remain owned by their source modules while Gateway owns their cross-feature consequences.
@@ -109,40 +109,16 @@ A typed client-facing layer used by CLI and future user interfaces to discover a
 _Avoid_: HTTP response leak, non-success-means-error, message-parsing client, command service, lifecycle client, generic JSON caller, managed gateway
 
 **Gateway Owner**:
-The module that holds the Gateway Ownership Lock and publishes Gateway Router discovery state for a long-running ownerless `serve` or `start` command or transient ownerless CA work. Once published, start, CA Lifecycle Commands, status, and stop address that owner, while competing serve fails.
-_Avoid_: daemon supervisor, client command, detached runtime owner, terminal command renderer
-
-**Gateway Host**:
-The process-bootstrap role that establishes and keeps a Gateway Owner available independently of whether Gateway Runtime is activated. An ownerless start combines Gateway Hosting with the Start operation, Router-Only Serve hosts without starting, and an HTTP control surface can only address an already-hosted owner.
-_Avoid_: CLI-owned Start semantics, implicit serve command, HTTP process bootstrap, Gateway Runtime
+The foreground process launched by start. It holds the Gateway Ownership Lock through initialization, serving, and cleanup, and publishes the Gateway Router address and token only after traffic initialization and initial System PAC Delivery finish. Other CLI processes issue short-lived control commands to that owner. A second start reports already-running without changing it.
+_Avoid_: daemon supervisor, control-only owner, transient CA owner, remote activation, detached runtime owner
 
 **Gateway Runtime**:
 The live traffic-serving engine that owns the proxy listener and server, Gateway-owned outbound proxy transport, immutable Served Traffic Projection, PAC listener and server, runtime close behavior, and fatal serving-error reporting. Gateway lifecycle owns retained UserCA facts, assessment error, revision and expiry deadline, plus observations, projections and issues for each Upstream List; it derives their Effective Upstream List and traffic consequences and invokes System PAC directly. It begins only after initial observation and UserCA assessment have established their facts; feature degradation never ends it, while explicit Gateway stop or an irrecoverable proxy or PAC serving failure ends it coherently.
 _Avoid_: initializing runtime, retained observation result, retained raw contents, lifecycle facade, command router, OS proxy manager, cleanup owner
 
-**Router-Only Serve**:
-A command behavior where the command becomes the Gateway Owner and starts the Gateway Router as an HTTP client entry point without automatically starting Gateway Runtime, running Gateway Footprint Cleanup at serve startup, or changing managed OS state; it fails clearly when a Gateway Owner already exists and may claim stale Gateway State Cache only after verification finds no reachable owner.
-_Avoid_: implicit gateway start, daemonized start, hidden lifecycle activation, stale-cache cleanup, OS PAC repair
 
-**Router-Hosted Start**:
-A start behavior where CLI or another client calls `POST /start` against an existing Gateway Owner with the invoking client's absolute working directory, renders any required Start decision, and retries with that decision to activate Gateway Runtime without creating a competing gateway process. The existing owner remains foreground, and an already-active runtime returns an idempotent start result.
-_Avoid_: start plan, terminal prompt in serve, duplicate router start, serve-blocked start, split-brain gateway
 
-**Start-Hosted Router**:
-A startup behavior where gateway start becomes the Gateway Owner by hosting the Gateway Router and Gateway Runtime while activation remains governed by the Start Sequence.
-_Avoid_: router-only fallback, control endpoint replacement, implicit consent
 
-**Router-Hosted Start Failure**:
-A failed start behavior where direct `start` exits and removes owner visibility, while `/start` sent to an existing router-only Gateway Owner leaves that owner alive.
-_Avoid_: surprise serve fallback, failed-start owner leak, serve shutdown on start rejection
-
-**Owner-Owned Start**:
-After input validation and any required Upstream List Creation Consent, Gateway accepts Start only if its request is still live. Accepted startup and the resulting runtime belong to the owner: HTTP response completion or client disconnection does not stop them. Stop cancels startup, waits for it to settle, cleans System PAC while traffic still serves, and then closes traffic. A foreground owner signal invokes that Stop path; interruption of a client routed to another owner only stops waiting.
-_Avoid_: request-owned runtime, disconnected-client rollback, signal-cancelled traffic before cleanup
-
-**Owner-Routed Start**:
-A start behavior where an ownerless CLI command becomes the long-running Gateway Owner, while a CLI command finding an existing owner calls its Gateway Router and exits after the result. Routed start never transfers foreground ownership from the existing owner.
-_Avoid_: competing gateway process, owner replacement, split-brain gateway, routed caller claiming foreground ownership
 
 **Managed System Proxy**:
 A traffic capture approach where the gateway configures the operating system or browser proxy settings on behalf of the user, so application requests keep their original URLs and no manual proxy setup is required. Each delivery considers every currently visible Network Service, changes only empty or marker-owned PAC settings, and may recover unavailable routing on a later delivery.
@@ -193,12 +169,12 @@ A terminal stop behavior that terminates any live Gateway Owner and attempts eve
 _Avoid_: first-error cleanup, silent cleanup issue, cleanup-gates-stop, retrying owner, router-only fallback
 
 **Owner Stop**:
-A stop behavior used by explicit stop, graceful process termination, and unexpected Gateway Router termination. It rejects new work, cancels pending delivery triggers, performs System PAC Cleanup for either a start-hosted or router-only owner, closes Gateway Runtime when present, waits for admitted owner-owned CA mutation, and then tears down Router and ownership even when cleanup is incomplete; an active runtime keeps its traffic endpoints serving until cleanup finishes.
-_Avoid_: runtime-only stop, router-only survival, retrying owner, runtime-close-before-PAC-cleanup, cleanup issue hidden by stop success
+The one cleanup path used by explicit stop, foreground cancellation, initialization failure, and serving termination. It closes admission, waits for admitted CA work and projection delivery, attempts System PAC Cleanup while traffic remains available, closes traffic, removes owned discovery state, and ends the process. Concurrent stop requests and signals share one cleanup result; cleanup uncertainty never preserves ownership.
+_Avoid_: runtime-close-before-PAC-cleanup, duplicate cleanup, retrying owner, hidden cleanup uncertainty
 
 **Owner Ending**:
-A terminal Gateway Owner lifecycle state that begins when Owner Stop takes precedence and lasts until the process exits. An admitted CA Lifecycle Command may settle, but new start, install, and uninstall work are rejected and cleanup failure does not reopen command admission.
-_Avoid_: owner stopping, retry window, late start admission, start-after-stop
+A terminal Gateway Owner lifecycle state lasting from cleanup admission through process exit. Admitted CA work may settle, while new CA mutations and traffic updates are rejected; cleanup failure does not reopen admission.
+_Avoid_: retry window, late mutation admission, reusable stopped owner
 
 **UserCA**:
 A simplified product name for the current user's seamless-cors-owned development certificate authority, including Installed User CA lifecycle and local signing material.
@@ -233,24 +209,20 @@ An admitted install or uninstall belongs to the Gateway Owner and settles indepe
 _Avoid_: request-owned mutation, disconnect cancellation, stop-cancelled CA command, caller-managed commit boundary
 
 **Gateway-Owned CA Lifecycle**:
-A lifecycle rule where install, Installed User CA Renewal, and uninstall route through an existing Gateway Owner or a discoverable Transient Gateway Owner published before ownerless work. Gateway Ownership provides cross-process routing, discovery, mutation serialization, and active-HTTPS-Pipeline coordination; traffic continues serving while lifecycle operations settle.
-_Avoid_: ownerless CA mutation, undiscoverable ownership holder, separate CA Mutation Lease, direct UserCA command execution, caller-managed CA locking
-
-**Transient Gateway Owner**:
-A discoverable Gateway Owner published before ownerless CA lifecycle work. It exposes the Gateway Router and Gateway State Cache while coordinating one finite CA mutation; status reports `userca: mutating`, stop enters Owner Ending and waits, competing CA work and start fail fast, and the owner cannot be promoted into a long-running owner.
-_Avoid_: promotable CA owner, install-owned Gateway Runtime, private one-shot lease holder, hidden CA process, background daemon, undiscoverable owner
+A lifecycle rule where install, renewal, and uninstall route through an initialized Gateway Owner when one is reachable. Otherwise Gateway holds the instance lock and executes UserCA directly without publishing a Router or discovery state. Offline work excludes startup and other offline commands; lock contention without reachable control produces an explicit retry outcome.
+_Avoid_: unlocked offline mutation, temporary HTTP owner, separate CA lock, UserCA-owned traffic orchestration
 
 **Fail-Fast CA Mutation Admission**:
 A Gateway serialization rule where install and uninstall are rejected for explicit retry when another CA mutation is already admitted. Gateway maps that condition to `userca: mutating`, holds command admission through withdrawal, mutation, adoption, and their synchronous System PAC deliveries. An admitted command may wait for a preceding delivery; the state lock remains available during OS work, stop waits for admitted work, and competing CA mutations are not queued. Fresh status inspection may wait for System PAC’s own serialization.
-_Avoid_: owner-exists-means-busy, queued CA mutation, concurrent CA mutation, blocked status
+_Avoid_: live-owner-exists-means-busy, queued CA mutation, concurrent CA mutation, blocked live status
 
 **Ownership-Protected Status Assessment**:
-An ownerless Read-Only Status behavior that briefly holds the Gateway Ownership Lock without publishing Gateway Router discovery state, assesses Gateway and UserCA facts coherently, then releases the lock. If ownership acquisition loses a race, status rediscovers the new owner rather than combining facts across ownership generations.
-_Avoid_: Transient Gateway Owner for status, status-written discovery cache, unlocked multi-location CA assessment, status mutation
+An offline Read-Only Status behavior that briefly holds the Gateway Ownership Lock without publishing discovery state, then freshly inspects UserCA and System PAC. If acquisition loses a race, status rediscovers an initialized owner or reports a retry outcome without inspecting unlocked state.
+_Avoid_: status-written discovery cache, unlocked multi-location CA assessment, status mutation
 
 **Settled-CA Start Admission**:
-An owner-coordinated startup boundary where UserCA assessment is serialized with CA Lifecycle Commands so every Gateway Runtime begins with coherent UserCA Usability and never loads authority facts from an in-progress mutation.
-_Avoid_: conditional runtime UserCA assessment, runtime boot from mutating CA state, marker polling, UserCA-owned runtime coordination
+A startup boundary where the instance lock excludes offline CA work throughout initialization. The foreground Gateway freshly assesses UserCA before publishing traffic and exposes live CA commands only after initialization finishes.
+_Avoid_: runtime boot from mutating CA state, marker polling, startup HTTP command admission
 
 **Installed UserCA Pair**:
 The one seamless-cors-owned certificate and matching private key represented in current-user OS trust and local authority storage. A usable state has exactly one matching trusted identity; replacement does not preserve an overlapping old authority. UserCA exposes only current facts and retains no version, generation, or authority history.
@@ -329,12 +301,12 @@ A source-specific optional Gateway lifecycle-owned current problem containing th
 _Avoid_: Upstream List Projection Error State, combined Upstream List State, raw error identity, failure event history, file sync issue
 
 **Gateway Control Command**:
-A user-facing command that controls gateway-owned state or reports on it, including start, serve, stop, status, UserCA install, and UserCA uninstall.
-_Avoid_: lifecycle operation, command service, control endpoint operation
+A user-facing command that controls Gateway-owned state or reports it: start, stop, status, UserCA install, and UserCA uninstall. Only start owns the long-running foreground process.
+_Avoid_: control-only serve, remote start, command service
 
 **Start Sequence**:
-The public Gateway Module start flow that verifies ownership, removes stale Gateway State Cache when appropriate, establishes independent continuous observation and initial Gateway-owned state for both Upstream Lists even when a source is unavailable, forms the Effective Upstream List, establishes coherent UserCA Usability, derives Gateway Traffic Demands, and then attempts Gateway Activation. Stale marker-owned PAC settings are adopted directly by initial System PAC Delivery rather than cleaned before runtime startup.
-_Avoid_: start-time CA installation, public raw activation, PAC-first start, cleanup-after-approval
+The foreground Gateway flow that acquires the instance lock, captures its exact working directory, obtains creation consent when required, removes stale discovery state, creates the Global Upstream List when authorized, observes both lists, assesses UserCA, serves traffic, attempts initial PAC delivery, and publishes local control discovery. Stale owned PAC settings are replaced by initial delivery rather than cleaned before traffic starts.
+_Avoid_: start-time CA installation, remote activation, PAC-first start, request-owned runtime
 
 **Gateway Activation**:
 The internal operation that begins serving Gateway Runtime with its retained facts, demands, active outcomes, and current projections, performs System PAC Delivery, and then produces Start Guidance. It is invoked only through the Start Sequence so callers cannot bypass cleanup, fact establishment, System PAC Configuration Protection, or traffic-before-PAC ordering.
@@ -429,8 +401,8 @@ One synchronous best-effort attempt to give every currently visible Network Serv
 _Avoid_: fixed service set, activation assessment, control lifetime, request conflation, all-or-nothing rollout, foreign PAC replacement, background reconciliation
 
 **System PAC Delivery Request**:
-A direct synchronous Gateway lifecycle call triggered by initial start, each effective Traffic Projection change, or repeated start. Every admitted trigger performs its own delivery and report recording before that sequence finishes. There is no publisher/consumer channel, delivery coalescing, or background retry; Stop rejects triggers that have not begun delivery.
-_Avoid_: conflated request, arbitrary queue capacity, background retry, System PAC-owned queue, Traffic Projection publication
+A synchronous Gateway lifecycle call triggered by initial start or each effective Traffic Projection change. Each admitted trigger records its own delivery report before finishing. Delivery failure remains nonfatal and has no background retry; repeating start while running is a no-op, so explicit retry requires a routing change or stop followed by start.
+_Avoid_: delivery coalescing, background retry, repeated-start repair
 
 **System PAC Observation**:
 Fresh read-only facts about every currently visible Network Service, collected over an observation interval rather than an atomic snapshot. System PAC can establish whether those observed settings route a supplied PAC Endpoint, and observation remains available without a live endpoint.
@@ -473,16 +445,16 @@ A gateway ownership rule where only one Gateway Owner may run in a Gateway Coord
 _Avoid_: multi-instance gateway, competing PAC state, port-based instance detection
 
 **Upstream List Creation**:
-A Gateway-owned Start operation that assesses the Global Upstream List path and, after Upstream List Creation Consent, immediately and exclusively attempts creation of the missing file and required parent directories with the Upstream List module's exact default contents. Failure returns its actionable cause without preventing Start; Gateway subsequently establishes observation independently, and creation is neither available for the Directory Upstream List, deferred until Gateway Activation, nor rolled back when a later Start decision prevents activation.
-_Avoid_: Configuration Bootstrap, silent file creation, init command, manual file scaffolding, read-time mutation, configurable Upstream List path, replacing invalid paths
+A startup operation that exclusively creates the missing Global Upstream List and required parent directories after consent in the launching CLI. It uses the Upstream List module default contents and never overwrites an existing path. Creation failure is reported while startup continues with independent observation; the Directory Upstream List is never created.
+_Avoid_: silent file creation, runtime recreation, replacing existing contents, config editing command
 
 **Upstream List Creation Warning**:
 A surface-neutral, non-persistent Start warning containing the actionable cause of a failed authorized Upstream List Creation attempt. It appears only on the Start result produced by that attempt, is absent after successful creation, and remains independent from any Upstream List File Sync Issue observed afterward.
 _Avoid_: runtime state, successful-creation notice, Upstream List File Sync Issue, merged creation and observation error, warning replay
 
 **Upstream List Creation Consent**:
-A fingerprint-bound user decision required when Gateway assesses the fixed path as missing, presented at most once per Start Sequence and authorizing immediate exclusive creation at the disclosed path with the Upstream List module's default contents and any disclosed missing parent directories, independently from System PAC Configuration Protection. The default contents are not rendered as part of the consent prompt. Declining preserves the missing path but allows that Start Sequence to continue degraded without asking again; a later Start reassesses, while runtime disappearance never requests consent or recreates the file or its parent.
-_Avoid_: combined Start consent, CLI-invented consent, consent error, overwrite authorization, runtime bootstrap, implicit default creation
+A user decision presented once in the launching CLI when the fixed Global Upstream List path is missing. The prompt discloses that path and missing parent directories; acceptance authorizes exclusive creation with default contents, while decline allows startup to continue degraded. Cancellation before creation prevents mutation. There is no HTTP consent or fingerprint retry protocol.
+_Avoid_: overwrite authorization, implicit file creation, remote startup consent
 
 **Start Guidance**:
 A start-time user-facing output behavior shown only after initial System PAC Delivery has been attempted and Gateway Runtime is serving. It reports active traffic outcomes, Blocked HTTPS CORS Demand, UserCA Assessment Issue, current Upstream List issues, every visible Network Service and its current PAC state, System PAC delivery failures, and whether routing currently uses the runtime's PAC Endpoint.
@@ -493,24 +465,20 @@ A surface-neutral successful start result detail containing the user-relevant Up
 _Avoid_: terminal start text, listener status detail, proxy setup instructions
 
 **Already-Running Start**:
-An idempotent fulfilled start result where executing start against an active Gateway Runtime preserves that runtime and requests a fresh System PAC Delivery as an explicit repair attempt. A different invoking working directory does not replace the active Directory Upstream List or add mismatch guidance; runtime-source visibility belongs to status.
-_Avoid_: duplicate runtime activation, start failure for active runtime, second owner, configuration mismatch warning, status-shaped start result, no-op PAC retry
+A fulfilled result reporting an initialized Gateway instance. It performs no traffic, PAC, CA, or Upstream List mutation and preserves the original foreground process and Directory Upstream List.
+_Avoid_: duplicate runtime activation, second owner, repeated-start PAC repair, working-directory replacement
 
 **Execute-Time Start Assessment**:
 A start execution rule that presents Upstream List Creation Consent at most once, applies its accepted mutation immediately, and then performs System PAC Delivery after Gateway Runtime begins serving. Every delivery independently discovers all currently visible Network Services and may adopt newly visible, newly empty, or marker-owned settings.
 _Avoid_: PAC consent, combined consent, fulfilled assessment, successful start assessment, start plan, repeated consent loop, consent-time service expansion
 
 **Single-Flight Start**:
-A start behavior where a Gateway Owner accepts only one complete Start Sequence at a time, acquiring exclusivity before cleanup and holding it through Upstream List creation assessment and Source establishment, conditional HTTPS Pipeline assessment, Gateway Activation, initial System PAC Delivery, and the returned outcome. Concurrent attempts return already-running or start-already-mutating without duplicating lifecycle work.
-_Avoid_: cross-command lifecycle lock, CA-command blocking, activation-only lock, queued start, duplicate mutation, competing activation, start plan reservation
+The instance lock excludes competing startup and offline commands throughout initialization and remains held until foreground cleanup finishes. Competing start returns already-running when initialized control is reachable, otherwise an ownership-transition outcome for explicit retry.
+_Avoid_: queued start, competing activation, HTTP start reservation
 
-**Stop-Preempted Start**:
-A lifecycle precedence rule where `stop` cancels and supersedes an in-progress Start Sequence, waits for safe boundaries, then performs final Gateway Footprint Cleanup and ends ownership. Cancelled activation cannot later publish runtime or install PAC state.
-_Avoid_: stop-busy result, start mutex wait, cleanup-before-cancellation, post-stop PAC install
-
-**Stop-Cancelled Start**:
-A surface-neutral expected start outcome returned to the original start caller after stop preemption reaches a safe boundary without treating cancellation as an infrastructure failure.
-_Avoid_: context-canceled error, started result, stop failure
+**Cancelled Start**:
+A surface-neutral expected cancelled outcome when foreground cancellation interrupts traffic initialization. The same process then cleans System PAC before closing any published traffic. During initialization, another CLI cannot remotely stop the process and reports busy for retry.
+_Avoid_: HTTP startup cancellation, cleanup-before-traffic readiness, remote stop preemption
 
 **System PAC Start Detail**:
 A surface-neutral start result reporting the initial PAC delivery outcome across every then-visible Network Service, including current foreign or unobservable services, delivery failures, whether routing currently uses this runtime's PAC Endpoint, and no-restoration cleanup behavior. It does not fix a service set or prevent Gateway Runtime startup when routing is unavailable.
@@ -533,8 +501,8 @@ A lifecycle boundary where CA Trust Consent and Installed User CA mutation occur
 _Avoid_: start-time CA trust, stop-cancelled CA command, intent-triggered installation, route-dependent trust setup
 
 **Start Sequence Order**:
-A startup lifecycle order where Gateway State Cache cleanup, the fixed Upstream List Creation Consent stage, immediate best-effort consented creation, Upstream List observation establishment, and settled UserCA assessment precede Gateway Runtime startup. Gateway derives demands and HTTPS Pipeline Required from those facts, switches its initial Served Traffic Projection, begins serving, then requests System PAC Delivery, which directly replaces stale marker-owned settings; delivery failure is reported without ending the runtime, and a later effective Traffic Projection change or repeated start retries delivery.
-_Avoid_: start-time CA installation, PAC-before-runtime serving, PAC-first start, cleanup-after-approval, start guidance before PAC Set
+The sequential order is instance lock, working-directory capture, creation consent, stale discovery cleanup, consented file creation, source observation, UserCA assessment, coherent traffic publication and serving, initial System PAC Delivery, then control serving and discovery publication. Delivery failure is reported while traffic continues. Recovery uses an effective Traffic Projection change or stop followed by start.
+_Avoid_: start-time CA installation, PAC-before-traffic serving, remote activation, repeated-start PAC repair
 
 **Minimal Command Surface**:
 The user-facing command model where normal operation is limited to starting, stopping, and viewing gateway status while Gateway Runtime continuously observes and projects the Upstream List.
@@ -577,20 +545,20 @@ A CA lifecycle invariant where uninstall removes all seamless-cors-owned current
 _Avoid_: cross-environment CA search, false uninstall success, trusted CA without selected-environment material
 
 **Foreground Start**:
-A runtime behavior where `start` runs attached in the foreground rather than launching a background daemon. The first process cancellation executes Owner Stop, while a second cancellation may force immediate exit from cleanup.
-_Avoid_: daemon mode, background start, signal-only cleanup path, indefinitely blocked forced exit
+A process behavior where start stays attached from initialization through cleanup. The first cancellation interrupts initialization or begins Owner Stop; a second cancellation may force exit. The control endpoint becomes discoverable only after initialization.
+_Avoid_: daemon mode, background start, HTTP startup, indefinitely blocked forced exit
 
 **Client Command**:
 A command invocation that asks an existing Gateway Owner to perform user-facing gateway work and then exits without owning process lifetime or Gateway Footprint Cleanup.
 _Avoid_: detached owner, fake foreground control, remote Ctrl-C ownership
 
 **Owner-Routed CA Lifecycle Command**:
-A CA Lifecycle Command behavior where work is sent to an existing Gateway Owner or publishes a Transient Gateway Owner when none exists. This keeps UserCA mutation available during a long-running gateway while the owner coordinates retained UserCA facts, demands, active outcomes, and System PAC consequences.
-_Avoid_: bypassing owner command authority, ownerless local mutation, separate CA Mutation Lease, separate readiness endpoint, blanket active-runtime rejection
+A short-lived CLI command that sends CA work to an initialized Gateway Owner, which owns withdrawal, mutation, adoption, and PAC consequences. When no owner is reachable, Gateway executes the operation directly under the instance lock and publishes no control server.
+_Avoid_: bypassing live owner authority, unlocked offline CA mutation, temporary HTTP owner
 
 **Gateway Footprint Cleanup**:
-A stop behavior that asks System PAC to clean marker-owned PAC state and independently removes the Gateway State Cache while leaving Installed User CA state untouched. It runs as part of stopping a start-hosted or router-only owner and also when `stop` finds no owner; cleanup does not depend on whether that owner ever changed PAC state.
-_Avoid_: live-owner-only cleanup, status cleanup, serve-start cleanup, broad cleanup, CA removal, restore-based cleanup
+A stop behavior that cleans marker-owned System PAC settings and removes owned Gateway discovery state while leaving Installed User CA untouched. It runs when the foreground process ends and when an offline stop obtains the instance lock; cleanup attempts every subject even when another fails.
+_Avoid_: live-owner-only cleanup, status cleanup, CA removal, previous-PAC restoration
 
 **No PAC Restoration**:
 A cleanup boundary where Gateway Footprint Cleanup removes seamless-cors-owned PAC settings without reconstructing previous machine PAC state.
@@ -609,8 +577,8 @@ A status behavior that requests fresh System PAC Observation and reports gateway
 _Avoid_: status-triggered cleanup, mutating status command
 
 **Gateway Status State**:
-A read-only gateway status vocabulary that describes whether the Gateway Owner and Gateway Runtime are absent, stale, router-only, ending, starting, or running without encoding Command Fulfillment, cleanup, traffic outcomes, or UserCA Usability. A Status Result keeps its Operation-Specific Result Kind separate from this state: `reported` is fulfilled for every reported state, while an ownership-transition result is unfulfilled and has no reported state.
-_Avoid_: status-as-command-failure, cleanup status, UserCA state, start result, runtime state file truth
+A read-only vocabulary of not-running, stale-cache, ending, and running. An ownership-transition command result has no reported state and requests retry while startup or offline work holds the lock without reachable control. State remains separate from command fulfillment, cleanup, traffic outcomes, and UserCA Usability.
+_Avoid_: control-only state, startup HTTP state, status-as-command-failure, runtime state file truth
 
 **UserCA Usability**:
 A two-state module-owned fact where UserCA is `usable` only when one valid Installed UserCA Pair has matching current-user OS trust, and is otherwise `not-usable`; Gateway establishes and maintains it throughout every running Gateway Runtime independently of current selectors. An adopted Upstream List update reassesses only a current not-usable fact or UserCA Assessment Issue, while usable state waits for lifecycle work or its expiry deadline.
@@ -633,7 +601,7 @@ The user-wide Upstream List at `seamless-cors/upstreams.txt` under the platform-
 _Avoid_: user Upstream List, default Upstream List, shared Upstream List
 
 **Directory Upstream List**:
-An optional `upstreams.txt` found only in the invoking client's exact absolute working directory captured when Gateway Runtime starts. Its absence is an empty source rather than degradation, it is never created by seamless-cors, and an Already-Running Start from another directory does not replace it.
+An optional `upstreams.txt` found only in the launching CLI's exact absolute working directory captured during startup. Its absence is an empty source rather than degradation, it is never created by seamless-cors, and an Already-Running Start from another directory does not replace it.
 _Avoid_: Local Upstream List, project Upstream List, ancestor Upstream List, recursively discovered Upstream List, dynamic working-directory list
 
 **Effective Upstream List**:

@@ -38,7 +38,7 @@ func TestAssessUpstreamListCreationDisclosesCreationConsequences(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing", "nested", "upstreams.txt")
 	consent := assessUpstreamListCreation(path)
 	if consent == nil || consent.Path != path || consent.DefaultContents != upstreamlist.DefaultContents ||
-		len(consent.MissingParentDirectories) != 2 || consent.Fingerprint == "" {
+		len(consent.MissingParentDirectories) != 2 {
 		t.Fatalf("consent = %#v", consent)
 	}
 }

@@ -18,18 +18,9 @@ type owner struct {
 	listener  net.Listener
 	lifecycle *lifecycle
 	router    *routerServer
-	lock      *ownerLock
 }
 
-func newOwnerWithCoordinator(pac systempac.Module, ca userCAModule, coord *coordinator) (*owner, error) {
-	return newOwner(pac, ca, coord, true)
-}
-
-func newTransientOwnerWithCoordinator(pac systempac.Module, ca userCAModule, coord *coordinator) (*owner, error) {
-	return newOwner(pac, ca, coord, false)
-}
-
-func newOwner(pac systempac.Module, ca userCAModule, coord *coordinator, inspectUserCA bool) (*owner, error) {
+func newOwner(pac systempac.Module, ca userCAModule, coord *coordinator) (*owner, error) {
 	token, err := randomToken()
 	if err != nil {
 		return nil, err
@@ -38,153 +29,65 @@ func newOwner(pac systempac.Module, ca userCAModule, coord *coordinator, inspect
 	if err != nil {
 		return nil, fmt.Errorf("router listener unavailable: %w", err)
 	}
-	routerListen := listener.Addr().String()
-	lifecycle := newLifecycleState(pac, ca, coord, routerListen, inspectUserCA)
-	cache := stateCache{HTTPRouterListen: routerListen, Token: token}
-	lifecycle.SetOwnerCache(cache)
-	router := newRouter(token, lifecycle)
+	cache := stateCache{HTTPRouterListen: listener.Addr().String(), Token: token}
+	lifecycle := newLifecycle(pac, ca, coord)
+	lifecycle.ownerCache = cache
 	return &owner{
 		coord:     coord,
 		cache:     cache,
 		listener:  listener,
 		lifecycle: lifecycle,
-		router:    router,
+		router:    newRouter(token, lifecycle),
 	}, nil
 }
 
-func (o *owner) Run(ctx context.Context, afterPublish func(context.Context) error) error {
-	if o.lock == nil {
-		return fmt.Errorf("Gateway Owner requires Gateway Ownership Lock")
-	}
+// Run initializes traffic, publishes control discovery, and waits for shutdown.
+// The caller holds the instance lock for this entire lifetime.
+func (o *owner) Run(ctx context.Context, directoryPath string, create bool, started func(StartResult)) (result StartResult, err error) {
+	defer o.listener.Close()
 	defer func() {
-		_ = o.lock.Release()
-		o.lock = nil
-	}()
-	errs := make(chan error, 1)
-	go func() { errs <- o.router.Serve(o.listener) }()
-	if err := o.coord.Claim(o.cache); err != nil {
-		_ = o.router.Close(context.Background())
-		return err
-	}
-	defer o.coord.RemoveOwned(o.cache)
-	event := superviseOwner(ctx, afterPublish, o.router.ShutdownRequested(), o.lifecycle.FatalRuntimeErrors(), errs, o.lifecycle.beginStop)
-	switch event.kind {
-	case ownerEventContextDone:
-		return o.stopAndClose(event.err)
-	case ownerEventShutdownRequested:
-		_ = o.router.Close(context.Background())
-		return nil
-	case ownerEventFatalRuntime:
-		return o.stopAndClose(event.err)
-	case ownerEventRouterStopped:
-		// A Router that terminates without an explicit Stop still executes the
-		// same terminal Owner Stop path before ownership is released.
-		if event.err == http.ErrServerClosed {
-			event.err = nil
+		// Cleanup keeps traffic serving until owned system PAC settings are removed.
+		cleanup, stopErr := o.lifecycle.Stop(context.Background())
+		closeErr := o.router.Close(context.Background())
+		if cleanup.CleanupFulfillment == CommandUnfulfilled {
+			stopErr = errors.Join(stopErr, ownerStopCleanupError{failures: cleanup.CleanupFailures})
 		}
-		return o.stopAndClose(event.err)
-	case ownerEventActivationFailed:
-		_ = o.closeOwnerOnly(context.Background())
-		return event.err
-	default:
-		return fmt.Errorf("unknown gateway owner event %d", event.kind)
+		err = errors.Join(err, stopErr, closeErr)
+	}()
+
+	result, err = o.lifecycle.activate(ctx, directoryPath, create)
+	if err != nil || result.Kind() != StartResultStarted {
+		return result, err
 	}
+	if ctx.Err() != nil {
+		return StartCancelled{}, nil
+	}
+
+	// Only an initialized Gateway accepts commands from another CLI process.
+	routerErrors := make(chan error, 1)
+	go func() { routerErrors <- o.router.Serve(o.listener) }()
+	if err := o.coord.Claim(o.cache); err != nil {
+		return result, err
+	}
+	if started != nil {
+		started(result)
+	}
+
+	select {
+	case <-ctx.Done():
+	case <-o.router.ShutdownRequested():
+	case err = <-o.lifecycle.fatal:
+	case err = <-routerErrors:
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+	}
+	return result, err
 }
 
 type ownerStopCleanupError struct{ failures []CleanupFailure }
 
 func (ownerStopCleanupError) Error() string { return "owner stop left gateway cleanup residue" }
-
-func (o *owner) stopAndClose(cause error) error {
-	result, stopErr := o.lifecycle.Stop(context.Background())
-	closeErr := o.router.Close(context.Background())
-	if result.Fulfillment() == CommandUnfulfilled {
-		stopErr = errors.Join(stopErr, ownerStopCleanupError{failures: append([]CleanupFailure(nil), result.CleanupFailures...)})
-	}
-	return errors.Join(cause, stopErr, closeErr)
-}
-
-func (o *owner) Shutdown(ctx context.Context) error {
-	_, _ = o.lifecycle.Stop(ctx)
-	return o.closeOwnerOnly(ctx)
-}
-
-func (o *owner) closeOwnerOnly(ctx context.Context) error {
-	_ = o.coord.RemoveOwned(o.cache)
-	return o.router.Close(ctx)
-}
-
-type ownerEventKind int
-
-const (
-	ownerEventContextDone ownerEventKind = iota
-	ownerEventShutdownRequested
-	ownerEventFatalRuntime
-	ownerEventRouterStopped
-	ownerEventActivationFailed
-)
-
-type ownerEvent struct {
-	kind ownerEventKind
-	err  error
-}
-
-// superviseOwner keeps ownership events observable while activation is pending.
-// Every interruption cancels the activation context and waits for the callback
-// to acknowledge cancellation before its caller tears down owned resources.
-func superviseOwner(
-	ctx context.Context,
-	afterPublish func(context.Context) error,
-	shutdownRequested <-chan struct{},
-	fatalRuntimeErrors <-chan error,
-	routerErrors <-chan error,
-	beginStop func(),
-) ownerEvent {
-	activationCtx, cancelActivation := context.WithCancel(ctx)
-	defer cancelActivation()
-
-	var activationDone <-chan error
-	if afterPublish != nil {
-		done := make(chan error, 1)
-		activationDone = done
-		go func() {
-			done <- afterPublish(activationCtx)
-		}()
-	}
-
-	for {
-		var event ownerEvent
-		select {
-		case err := <-activationDone:
-			activationDone = nil
-			if ctx.Err() != nil {
-				event = ownerEvent{kind: ownerEventContextDone}
-			} else if err != nil {
-				return ownerEvent{kind: ownerEventActivationFailed, err: err}
-			} else {
-				continue
-			}
-		case <-ctx.Done():
-			event = ownerEvent{kind: ownerEventContextDone}
-		case <-shutdownRequested:
-			event = ownerEvent{kind: ownerEventShutdownRequested}
-		case err := <-fatalRuntimeErrors:
-			event = ownerEvent{kind: ownerEventFatalRuntime, err: err}
-		case err := <-routerErrors:
-			event = ownerEvent{kind: ownerEventRouterStopped, err: err}
-		}
-		// Accepted Start belongs to the owner. Begin Stop before waiting for it;
-		// cancellation of the callback alone only ends pre-acceptance work.
-		if beginStop != nil {
-			beginStop()
-		}
-		cancelActivation()
-		if activationDone != nil {
-			<-activationDone
-		}
-		return event
-	}
-}
 
 func randomToken() (string, error) {
 	var bytes [32]byte

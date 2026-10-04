@@ -1,5 +1,7 @@
 # Sequential Gateway lifecycle
 
+Foreground process modes, startup, and repeated-start behavior are updated by [ADR-0014](./0014-foreground-gateway-management.md). Unaffected contracts below remain in force.
+
 Status: accepted
 
 This decision simplifies Gateway ownership and coordination. It supersedes the desired-versus-served failed-switch model and Traffic Projection Current in ADR-0011, the separate UserCA assessment and PAC delivery channels in ADR-0012, and the earlier rule that CA commands never wait for System PAC Delivery. It clarifies Start lifetime in ADR-0001 and places retained source and CA state from ADR-0003 and ADR-0004 in Gateway lifecycle.

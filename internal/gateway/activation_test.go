@@ -13,7 +13,7 @@ import (
 	"github.com/QzCurious/seamless-cors/internal/systempac"
 )
 
-func TestExecuteStartComposesTrafficAndDeliversPAC(t *testing.T) {
+func TestActivationComposesTrafficAndDeliversPAC(t *testing.T) {
 	home := t.TempDir()
 	globalPath := filepath.Join(home, "upstreams.txt")
 	if err := os.WriteFile(globalPath, []byte("api.example.test\nhttp://plain.example.test\n"), 0o600); err != nil {
@@ -23,10 +23,10 @@ func TestExecuteStartComposesTrafficAndDeliversPAC(t *testing.T) {
 		services:      []systemPACTestService{{ServiceName: "Wi-Fi", Observed: true}},
 		deliverRoutes: true,
 	}
-	lifecycle := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
+	lifecycle := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()))
 	lifecycle.globalUpstreamListPath = globalPath
 
-	result, err := lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: t.TempDir()})
+	result, err := lifecycle.activate(context.Background(), filepath.Join(t.TempDir(), upstreamListFileName), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,21 +53,21 @@ func TestExecuteStartComposesTrafficAndDeliversPAC(t *testing.T) {
 	}
 }
 
-func TestExecuteStartKeepsRuntimeActiveWhenSystemPACDeliveryFails(t *testing.T) {
+func TestActivationKeepsRuntimeActiveWhenSystemPACDeliveryFails(t *testing.T) {
 	globalPath := filepath.Join(t.TempDir(), "upstreams.txt")
 	if err := os.WriteFile(globalPath, []byte("api.example.test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	settings := &lifecycleTestSystemSettings{setErr: systempac.MutationError{ServiceName: "Wi-Fi", Cause: errors.New("denied")}}
-	lifecycle := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
+	lifecycle := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()))
 	lifecycle.globalUpstreamListPath = globalPath
-	result, err := lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: t.TempDir()})
+	result, err := lifecycle.activate(context.Background(), filepath.Join(t.TempDir(), upstreamListFileName), false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	started, ok := result.(Started)
-	if !ok || !lifecycle.RuntimeActive() || len(started.Guidance.SystemPAC.Issues) != 1 {
-		t.Fatalf("result/runtime = %#v / %t", result, lifecycle.RuntimeActive())
+	if !ok || !(lifecycle.runtime != nil) || len(started.Guidance.SystemPAC.Issues) != 1 {
+		t.Fatalf("result/runtime = %#v / %t", result, (lifecycle.runtime != nil))
 	}
 	settings.setErr = nil
 	status, err := lifecycle.Status(context.Background(), false)
@@ -80,37 +80,7 @@ func TestExecuteStartKeepsRuntimeActiveWhenSystemPACDeliveryFails(t *testing.T) 
 	_, _ = lifecycle.Stop(context.Background())
 }
 
-func TestRepeatedStartMakesDistinctDeliveryWithoutReplacingRuntime(t *testing.T) {
-	globalPath := filepath.Join(t.TempDir(), "upstreams.txt")
-	if err := os.WriteFile(globalPath, []byte("api.example.test\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	settings := &lifecycleTestSystemSettings{}
-	lifecycle := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
-	lifecycle.globalUpstreamListPath = globalPath
-	if _, err := lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: t.TempDir()}); err != nil {
-		t.Fatal(err)
-	}
-	lifecycle.mu.Lock()
-	before := lifecycle.runtimeStateLocked(lifecycle.runtime)
-	lifecycle.mu.Unlock()
-	result, err := lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	lifecycle.mu.Lock()
-	after := lifecycle.runtimeStateLocked(lifecycle.runtime)
-	lifecycle.mu.Unlock()
-	if _, ok := result.(AlreadyRunning); !ok || settings.applied != 2 {
-		t.Fatalf("result/applied = %#v / %d", result, settings.applied)
-	}
-	if before.ProxyListen != after.ProxyListen || before.PACListen != after.PACListen {
-		t.Fatalf("runtime endpoints changed: %#v -> %#v", before, after)
-	}
-	_, _ = lifecycle.Stop(context.Background())
-}
-
-func TestExecuteStartLoadsGlobalAndDirectoryUpstreamLists(t *testing.T) {
+func TestActivationLoadsGlobalAndDirectoryUpstreamLists(t *testing.T) {
 	globalPath := filepath.Join(t.TempDir(), "upstreams.txt")
 	if err := os.WriteFile(globalPath, []byte("global.example.test\nshared.example.test\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -120,9 +90,9 @@ func TestExecuteStartLoadsGlobalAndDirectoryUpstreamLists(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := &lifecycleTestSystemSettings{services: []systemPACTestService{{ServiceName: "Wi-Fi", Observed: true}}}
-	lifecycle := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()), "")
+	lifecycle := newLifecycle(settings, emptyTestUserCA{}, newCoordinator(t.TempDir()))
 	lifecycle.globalUpstreamListPath = globalPath
-	result, err := lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: workingDirectory})
+	result, err := lifecycle.activate(context.Background(), filepath.Join(workingDirectory, upstreamListFileName), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,9 +119,9 @@ func TestStartReportsBlockedHTTPSAndAssessmentIssue(t *testing.T) {
 		deliverRoutes: true,
 	}
 	ca := &fakeUserCA{inspectErr: errors.New("trust store unavailable")}
-	lifecycle := newLifecycle(settings, ca, newCoordinator(t.TempDir()), "")
+	lifecycle := newLifecycle(settings, ca, newCoordinator(t.TempDir()))
 	lifecycle.globalUpstreamListPath = globalPath
-	result, err := lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: t.TempDir()})
+	result, err := lifecycle.activate(context.Background(), filepath.Join(t.TempDir(), upstreamListFileName), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +196,7 @@ func TestUserCADeadlineInvalidatesServedHTTPSBeforeReassessment(t *testing.T) {
 
 func TestInstallUsesOnlyUserCAAndDoesNotCreateUpstreamList(t *testing.T) {
 	ca := &fakeUserCA{installState: testUserCAState(t, time.Now().Add(24*time.Hour), false)}
-	lifecycle := newLifecycle(&lifecycleTestSystemSettings{}, ca, newCoordinator(t.TempDir()), "")
+	lifecycle := newLifecycle(&lifecycleTestSystemSettings{}, ca, newCoordinator(t.TempDir()))
 	globalPath := filepath.Join(t.TempDir(), "upstreams.txt")
 	lifecycle.globalUpstreamListPath = globalPath
 	if _, err := lifecycle.Install(context.Background()); err != nil {
@@ -347,9 +317,4 @@ func (f *lifecycleTestSystemSettings) Cleanup(context.Context) error {
 	f.cleared++
 	f.cleanupCalls++
 	return f.clearErr
-}
-
-func executeAcceptedStart(t *testing.T, lifecycle *lifecycle) (StartResult, error) {
-	t.Helper()
-	return lifecycle.ExecuteStart(context.Background(), StartRequest{WorkingDirectory: t.TempDir()})
 }

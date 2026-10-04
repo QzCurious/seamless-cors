@@ -314,7 +314,7 @@ func newRuntimeFromSources(inputs []runtimeUpstreamListInput, transport *http.Tr
 		sources = append(sources, source)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	active := &activeRuntime{engine: engine, ctx: ctx, cancel: cancel, phase: runtimePhaseRunning, upstreamLists: sources}
+	active := &activeRuntime{engine: engine, ctx: ctx, cancel: cancel, upstreamLists: sources}
 	owner := &lifecycle{runtime: active, userCAState: ca, userCAAssessmentErr: assessmentErr,
 		systemPAC: &lifecycleTestSystemSettings{}, userCA: &fakeUserCA{state: ca, inspectErr: assessmentErr}, fatal: make(chan error, 1)}
 	owner.publishTrafficLocked(active)

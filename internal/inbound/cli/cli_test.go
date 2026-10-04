@@ -67,7 +67,7 @@ func TestCommandDiscoveryDoesNotRunGatewayCommands(t *testing.T) {
 }
 
 func TestCommandsRejectPositionalArgumentsBeforeRunning(t *testing.T) {
-	for _, name := range []string{"start", "serve", "stop", "status", "install", "uninstall", "version"} {
+	for _, name := range []string{"start", "stop", "status", "install", "uninstall", "version"} {
 		t.Run(name, func(t *testing.T) {
 			command := NewCommand()
 			child, _, err := command.Find([]string{name})

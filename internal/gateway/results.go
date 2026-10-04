@@ -15,19 +15,12 @@ const (
 )
 
 const (
-	StartResultStarted                             StartKind = "started"
-	StartResultAlreadyRunning                      StartKind = "already-running"
-	StartResultOwnerTransition                     StartKind = "owner-transition"
-	StartResultUpstreamListCreationConsentRequired StartKind = "upstream-list-creation-consent-required"
-	StartResultStartAlreadyMutating                StartKind = "start-already-mutating"
-	StartResultStopCancelled                       StartKind = "stop-cancelled"
-	StartResultCleanupFailed                       StartKind = "cleanup-failed"
+	StartResultStarted         StartKind = "started"
+	StartResultAlreadyRunning  StartKind = "already-running"
+	StartResultOwnerTransition StartKind = "owner-transition"
+	StartResultCancelled       StartKind = "cancelled"
+	StartResultCleanupFailed   StartKind = "cleanup-failed"
 )
-
-type StartRequest struct {
-	WorkingDirectory            string                            `json:"workingDirectory" minLength:"1"`
-	UpstreamListCreationConsent *UpstreamListCreationConsentInput `json:"upstreamListCreationConsent,omitempty"`
-}
 
 // StartResult is the closed semantic result of a Start operation.  Concrete
 // variants carry only the payload that is legal for that outcome.
@@ -49,41 +42,19 @@ type AlreadyRunning struct{}
 // StartOwnerTransition reports that ownership is being acquired or released.
 type StartOwnerTransition struct{}
 
-type StartUpstreamListCreationConsentRequired struct{ Consent UpstreamListCreationConsent }
-
 type UpstreamListCreationConsent struct {
-	Path                     string                          `json:"path"`
-	DefaultContents          string                          `json:"defaultContents"`
-	MissingParentDirectories []string                        `json:"missingParentDirectories,omitempty"`
-	Fingerprint              UpstreamListCreationFingerprint `json:"fingerprint"`
+	Path                     string   `json:"path"`
+	DefaultContents          string   `json:"defaultContents"`
+	MissingParentDirectories []string `json:"missingParentDirectories,omitempty"`
 }
 
-type UpstreamListCreationDecision string
-
-const (
-	UpstreamListCreationAccepted UpstreamListCreationDecision = "accepted"
-	UpstreamListCreationDeclined UpstreamListCreationDecision = "declined"
-)
-
-type UpstreamListCreationFingerprint string
-type UpstreamListCreationConsentInput struct {
-	Decision    UpstreamListCreationDecision    `json:"decision"`
-	Fingerprint UpstreamListCreationFingerprint `json:"fingerprint,omitempty"`
-}
-
-// StartAlreadyMutating reports that another start/CA mutation is in progress.
-type StartAlreadyMutating struct {
-	UpstreamListCreationWarning *UpstreamListCreationWarningDetail
-}
-
-// StartStopCancelled reports that Stop cancelled the Start operation.
-type StartStopCancelled struct {
+// StartCancelled reports foreground cancellation during initialization.
+type StartCancelled struct {
 	UpstreamListCreationWarning *UpstreamListCreationWarningDetail
 }
 
 type StartCleanupFailed struct {
-	Failures                    []CleanupFailure
-	UpstreamListCreationWarning *UpstreamListCreationWarningDetail
+	Failures []CleanupFailure
 }
 
 type UpstreamListCreationWarningDetail struct {
@@ -110,23 +81,11 @@ func (StartOwnerTransition) Fulfillment() CommandFulfillment {
 	return startFulfillment(StartResultOwnerTransition)
 }
 func (StartOwnerTransition) startResult() {}
-func (StartUpstreamListCreationConsentRequired) Kind() StartKind {
-	return StartResultUpstreamListCreationConsentRequired
+func (StartCancelled) Kind() StartKind    { return StartResultCancelled }
+func (StartCancelled) Fulfillment() CommandFulfillment {
+	return startFulfillment(StartResultCancelled)
 }
-func (StartUpstreamListCreationConsentRequired) Fulfillment() CommandFulfillment {
-	return CommandUnfulfilled
-}
-func (StartUpstreamListCreationConsentRequired) startResult() {}
-func (StartAlreadyMutating) Kind() StartKind                  { return StartResultStartAlreadyMutating }
-func (StartAlreadyMutating) Fulfillment() CommandFulfillment {
-	return startFulfillment(StartResultStartAlreadyMutating)
-}
-func (StartAlreadyMutating) startResult()  {}
-func (StartStopCancelled) Kind() StartKind { return StartResultStopCancelled }
-func (StartStopCancelled) Fulfillment() CommandFulfillment {
-	return startFulfillment(StartResultStopCancelled)
-}
-func (StartStopCancelled) startResult()    {}
+func (StartCancelled) startResult()        {}
 func (StartCleanupFailed) Kind() StartKind { return StartResultCleanupFailed }
 func (StartCleanupFailed) Fulfillment() CommandFulfillment {
 	return startFulfillment(StartResultCleanupFailed)
@@ -314,9 +273,7 @@ const (
 const (
 	GatewayStatusNotRunning GatewayStatusKind = "not-running"
 	GatewayStatusStaleCache GatewayStatusKind = "stale-cache"
-	GatewayStatusRouterOnly GatewayStatusKind = "router-only"
 	GatewayStatusEnding     GatewayStatusKind = "ending"
-	GatewayStatusStarting   GatewayStatusKind = "starting"
 	GatewayStatusRunning    GatewayStatusKind = "running"
 )
 

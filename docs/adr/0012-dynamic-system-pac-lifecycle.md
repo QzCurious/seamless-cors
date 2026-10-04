@@ -1,5 +1,7 @@
 # Dynamic System PAC lifecycle
 
+Foreground process modes, startup, and repeated-start behavior are updated by [ADR-0014](./0014-foreground-gateway-management.md). Unaffected contracts below remain in force.
+
 The Start lifetime, retained Gateway state ownership, and projection/delivery coordination described here are updated by [ADR-0013](./0013-sequential-gateway-lifecycle.md). Unaffected domain and module contracts remain in force.
 
 Status: accepted

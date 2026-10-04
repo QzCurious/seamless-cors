@@ -2,9 +2,6 @@ package gateway
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"net/http"
 
 	"github.com/QzCurious/seamless-cors/internal/systempac"
 )
@@ -16,39 +13,56 @@ func Stop(ctx context.Context) (StopResult, error) {
 }
 
 func stop(ctx context.Context, pac systempac.Module) (StopResult, error) {
+	if err := ctx.Err(); err != nil {
+		return StopResult{}, err
+	}
 	target, err := discover()
 	if err != nil {
 		return StopResult{}, err
 	}
-	if target.kind != targetActive {
-		cleanupReport, failures, err := cleanRuntime(ctx, pac)
+	// Forward to the initialized foreground process.
+	if target.kind == targetActive {
+		result, err := target.client.Stop(ctx)
 		if err != nil {
 			return StopResult{}, err
 		}
-		cleanupFulfillment := CommandFulfilled
-		if len(failures) > 0 {
-			cleanupFulfillment = CommandUnfulfilled
+		if result.Kind == StopResultStopped {
+			waitForStop(target.cache)
 		}
-		result := StopResult{Kind: StopResultNotRunning, CleanupFulfillment: cleanupFulfillment, SystemPACCleanup: cleanupReport, CleanupFailures: failures}
 		return result, nil
 	}
-	result, err := target.client.Stop(ctx)
+
+	// Offline cleanup holds the same lock as startup and CA work.
+	coord, err := defaultCoordinator()
 	if err != nil {
 		return StopResult{}, err
 	}
-	if result.Kind == StopResultStopped {
-		waitForStop(target.cache)
+	lock, acquired, err := coord.TryAcquireOwnerLock()
+	if err != nil {
+		return StopResult{}, err
 	}
-	return result, nil
+	if !acquired {
+		return StopResult{}, &instanceBusyError{}
+	}
+	defer lock.Release()
+	report, failures := cleanGatewayFootprint(ctx, pac, coord, nil)
+	cleanupFulfillment := CommandFulfilled
+	if len(failures) > 0 {
+		cleanupFulfillment = CommandUnfulfilled
+	}
+	return StopResult{Kind: StopResultNotRunning, CleanupFulfillment: cleanupFulfillment, SystemPACCleanup: report, CleanupFailures: failures}, nil
 }
 
-// GatewayStatus returns live owner status when available and otherwise
+// Status returns live owner status when available and otherwise
 // inspects local Gateway coordination and OS-managed state.
 func Status(ctx context.Context) (StatusResult, error) {
 	return status(ctx, openSystemPAC(), nil)
 }
 
 func status(ctx context.Context, pac systempac.Module, ca userCAModule) (StatusResult, error) {
+	if err := ctx.Err(); err != nil {
+		return StatusResult{}, err
+	}
 	target, err := discover()
 	if err != nil {
 		return StatusResult{}, err
@@ -81,7 +95,8 @@ func status(ctx context.Context, pac systempac.Module, ca userCAModule) (StatusR
 		return StatusResult{Kind: StatusResultOwnerTransition}, nil
 	}
 	defer lock.Release()
-	lifecycle := newLifecycle(pac, ca, coord, "")
+	lifecycle := newLifecycle(pac, ca, coord)
+	lifecycle.userCAState, lifecycle.userCAAssessmentErr = ca.Inspect(ctx)
 	return lifecycle.Status(ctx, target.kind == targetStale)
 }
 
@@ -92,6 +107,9 @@ func InstallCA(ctx context.Context) (InstallResult, error) {
 }
 
 func installCA(ctx context.Context, ca userCAModule) (InstallResult, error) {
+	if err := ctx.Err(); err != nil {
+		return InstallResult{}, err
+	}
 	target, err := discover()
 	if err != nil {
 		return InstallResult{}, err
@@ -99,22 +117,28 @@ func installCA(ctx context.Context, ca userCAModule) (InstallResult, error) {
 	if target.kind == targetActive {
 		return target.client.Install(ctx)
 	}
+	lock, routed, err := lockForLocalCommand()
+	if routed != nil {
+		return routed.Install(ctx)
+	}
+	if _, busy := err.(*instanceBusyError); busy {
+		return InstallResult{Kind: InstallResultOwnerTransition}, nil
+	}
+	if err != nil {
+		return InstallResult{}, err
+	}
+	defer lock.Release()
 	if ca == nil {
 		ca, err = openSystemUserCA()
 		if err != nil {
 			return InstallResult{}, err
 		}
 	}
-	result, routed, err := runTransient(ctx, ca, func(lifecycle *lifecycle) (InstallResult, error) {
-		return lifecycle.Install(ctx)
-	})
-	if routed != nil {
-		return routed.Install(ctx)
+	current, err := ca.Install(ctx)
+	if err != nil {
+		return InstallResult{}, err
 	}
-	if errors.Is(err, errOwnerTransition) {
-		return InstallResult{Kind: InstallResultOwnerTransition}, nil
-	}
-	return result, err
+	return InstallResult{Kind: InstallResultInstalled, InstalledCAExpires: current.ExpiresAt}, nil
 }
 
 // UninstallCA removes the Installed User CA through the live owner when one is
@@ -124,6 +148,9 @@ func UninstallCA(ctx context.Context, request UninstallRequest) (UninstallResult
 }
 
 func uninstallCA(ctx context.Context, ca userCAModule, request UninstallRequest) (UninstallResult, error) {
+	if err := ctx.Err(); err != nil {
+		return UninstallResult{}, err
+	}
 	target, err := discover()
 	if err != nil {
 		return UninstallResult{}, err
@@ -131,88 +158,58 @@ func uninstallCA(ctx context.Context, ca userCAModule, request UninstallRequest)
 	if target.kind == targetActive {
 		return target.client.Uninstall(ctx, request)
 	}
+	lock, routed, err := lockForLocalCommand()
+	if routed != nil {
+		return routed.Uninstall(ctx, request)
+	}
+	if _, busy := err.(*instanceBusyError); busy {
+		return UninstallResult{Kind: UninstallResultOwnerTransition}, nil
+	}
+	if err != nil {
+		return UninstallResult{}, err
+	}
+	defer lock.Release()
 	if ca == nil {
 		ca, err = openSystemUserCA()
 		if err != nil {
 			return UninstallResult{}, err
 		}
 	}
-	result, routed, err := runTransient(ctx, ca, func(lifecycle *lifecycle) (UninstallResult, error) {
-		return lifecycle.UninstallWithConsent(ctx, request.ConsentFingerprint)
-	})
-	if routed != nil {
-		return routed.Uninstall(ctx, request)
+	if err := ca.Uninstall(ctx); err != nil {
+		return UninstallResult{Kind: UninstallResultIncomplete, CleanupIssue: &UserCACleanupIssue{
+			Cause: err.Error(), Action: "Run `seamless-cors uninstall` again.",
+		}}, nil
 	}
-	if errors.Is(err, errOwnerTransition) {
-		return UninstallResult{Kind: UninstallResultOwnerTransition}, nil
-	}
-	return result, err
+	return UninstallResult{Kind: UninstallResultUninstalled}, nil
 }
 
-// runTransient publishes a router-only owner before executing one owner-owned
-// CA command. Losing the ownership race causes one rediscovery; callers then
-// route to the winner rather than performing local CA work.
-func runTransient[T any](
-	ctx context.Context,
-	ca userCAModule,
-	operation func(*lifecycle) (T, error),
-) (result T, routed *client, err error) {
+// lockForLocalCommand excludes startup and other offline work. If a Gateway
+// won the launch race, rediscover it once so the command can be forwarded.
+func lockForLocalCommand() (*ownerLock, *client, error) {
 	coord, err := defaultCoordinator()
 	if err != nil {
-		return result, nil, err
+		return nil, nil, err
 	}
 	lock, acquired, err := coord.TryAcquireOwnerLock()
 	if err != nil {
-		return result, nil, err
+		return nil, nil, err
 	}
-	if !acquired {
-		target, rediscoverErr := discover()
-		if rediscoverErr != nil {
-			return result, nil, rediscoverErr
-		}
-		if target.kind == targetActive {
-			return result, target.client, nil
-		}
-		return result, nil, fmt.Errorf("%w; retry command", errOwnerTransition)
+	if acquired {
+		return lock, nil, nil
 	}
-	releaseLock := true
-	defer func() {
-		if releaseLock {
-			err = errors.Join(err, lock.Release())
-		}
-	}()
-	owner, err := newTransientOwnerWithCoordinator(openSystemPAC(), ca, coord)
+	target, err := discover()
 	if err != nil {
-		return result, nil, err
+		return nil, nil, err
 	}
-	owner.lock = lock
-	releaseLock = false
-	owner.lifecycle.mu.Lock()
-	owner.lifecycle.transientOwner = true
-	owner.lifecycle.caMutating = true
-	owner.lifecycle.mu.Unlock()
+	if target.kind == targetActive {
+		return nil, target.client, nil
+	}
+	return nil, nil, &instanceBusyError{}
+}
 
-	routerErr := make(chan error, 1)
-	go func() { routerErr <- owner.router.Serve(owner.listener) }()
-	if err := coord.Claim(owner.cache); err != nil {
-		_ = owner.router.Close(context.Background())
-		_ = lock.Release()
-		owner.lock = nil
-		return result, nil, err
-	}
+// instanceBusyError means the instance lock is held without reachable control.
+type instanceBusyError struct{}
 
-	result, operationErr := operation(owner.lifecycle)
-	owner.lifecycle.mu.Lock()
-	owner.lifecycle.ownerEnding = true
-	owner.lifecycle.caMutating = false
-	owner.lifecycle.mu.Unlock()
-	closeErr := owner.router.Close(context.Background())
-	removeErr := coord.RemoveOwned(owner.cache)
-	lockErr := lock.Release()
-	owner.lock = nil
-	serveErr := <-routerErr
-	if serveErr != nil && serveErr != http.ErrServerClosed {
-		closeErr = errors.Join(closeErr, serveErr)
-	}
-	return result, nil, errors.Join(operationErr, closeErr, removeErr, lockErr)
+func (*instanceBusyError) Error() string {
+	return "gateway instance is busy; retry after the current operation finishes"
 }

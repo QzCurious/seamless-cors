@@ -1,5 +1,7 @@
 # Upstream configuration and PAC projection
 
+Foreground process modes, startup, and repeated-start behavior are updated by [ADR-0014](./0014-foreground-gateway-management.md). Unaffected contracts below remain in force.
+
 The Start lifetime, retained Gateway state ownership, and projection/delivery coordination described here are updated by [ADR-0013](./0013-sequential-gateway-lifecycle.md). Unaffected domain and module contracts remain in force.
 
 The transition-based PAC publication policy is superseded by [ADR-0011](./0011-gateway-traffic-projection-and-pac-delivery.md). Gateway now compares Traffic Projections semantically, switches coherent served traffic behavior itself, and treats Network Service PAC delivery as separate status. The source-observation, path, projection, merge, rejection, and ownership decisions below remain in force.

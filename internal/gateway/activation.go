@@ -7,8 +7,12 @@ import (
 	"github.com/QzCurious/seamless-cors/internal/lib/fileobservation"
 )
 
-// activate completes an accepted Start on the owner's cancellation context.
+// activate initializes traffic on the foreground process context.
+// Its caller always executes Stop after activation returns, including on failure.
 func (f *lifecycle) activate(ctx context.Context, directoryPath string, create bool) (result StartResult, resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var creationErr error
 	if create {
 		creationErr = createUpstreamList(f.globalUpstreamListPath)
@@ -41,7 +45,7 @@ func (f *lifecycle) activate(ctx context.Context, directoryPath string, create b
 		select {
 		case input.initial = <-input.observation.Outcomes():
 		case <-ctx.Done():
-			return StartStopCancelled{}, nil
+			return StartCancelled{}, nil
 		}
 		source, err := initialRuntimeUpstreamListSource(*input)
 		if err != nil {
@@ -53,21 +57,21 @@ func (f *lifecycle) activate(ctx context.Context, directoryPath string, create b
 	current, assessmentErr := f.userCA.Inspect(ctx)
 	f.caAdmissionMu.Unlock()
 	if ctx.Err() != nil {
-		return StartStopCancelled{}, nil
+		return StartCancelled{}, nil
 	}
 	engine, err := newTrafficRuntime(defaultProxyTransport())
 	if err != nil {
 		return nil, fmt.Errorf("start runtime: %w", err)
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
-	active := &activeRuntime{engine: engine, ctx: runCtx, cancel: cancel, phase: runtimePhaseStarting, upstreamLists: sources}
+	active := &activeRuntime{engine: engine, ctx: runCtx, cancel: cancel, upstreamLists: sources}
 
 	f.mu.Lock()
 	if f.ownerEnding || ctx.Err() != nil {
 		f.mu.Unlock()
 		cancel()
 		_ = engine.Close()
-		return StartStopCancelled{}, nil
+		return StartCancelled{}, nil
 	}
 	f.userCAState = current
 	f.userCAAssessmentErr = assessmentErr
@@ -76,54 +80,24 @@ func (f *lifecycle) activate(ctx context.Context, directoryPath string, create b
 	f.publishTrafficLocked(active)
 	f.mu.Unlock()
 	observationsOwned = true
-	started := false
-	defer func() {
-		if started {
-			return
-		}
-		f.mu.Lock()
-		// Stop owns cleanup once ending begins, including traffic that is already
-		// serving during a cancelled initial PAC delivery.
-		ending := f.ownerEnding
-		if !ending && f.runtime == active {
-			f.runtime = nil
-			if f.deadlineTimer != nil {
-				f.deadlineTimer.Stop()
-				f.deadlineTimer = nil
-			}
-		}
-		f.mu.Unlock()
-		if !ending {
-			cancel()
-			_ = engine.Close()
-			for _, source := range sources {
-				source.observation.Close()
-			}
-		}
-	}()
-
 	// Traffic must serve before OS PAC settings can point at it.
 	ready := make(chan struct{})
-	done := make(chan error, 1)
 	go func() {
 		err := engine.ServeReady(runCtx, ready)
-		done <- err
-		if err != nil {
-			select {
-			case f.fatal <- err:
-			default:
-			}
+		select {
+		case f.fatal <- err:
+		default:
 		}
 	}()
 	select {
 	case <-ready:
-	case err := <-done:
+	case err := <-f.fatal:
 		return nil, fmt.Errorf("gateway runtime failed before readiness: %w", err)
 	case <-ctx.Done():
-		return StartStopCancelled{}, nil
+		return StartCancelled{}, nil
 	}
 	select {
-	case err := <-done:
+	case err := <-f.fatal:
 		return nil, fmt.Errorf("gateway runtime failed before System PAC Delivery: %w", err)
 	default:
 	}
@@ -134,15 +108,13 @@ func (f *lifecycle) activate(ctx context.Context, directoryPath string, create b
 	f.mu.Lock()
 	if !delivered || f.ownerEnding || ctx.Err() != nil {
 		f.mu.Unlock()
-		return StartStopCancelled{}, nil
+		return StartCancelled{}, nil
 	}
 	f.resetUserCADeadlineLocked(active)
-	active.phase = runtimePhaseRunning
 	state := f.runtimeStateLocked(active)
 	installedCA := installedCAStatus(f.userCAState, f.userCAAssessmentErr, false, f.userCACleanupIssue)
 	issue := userCAAssessmentIssue(f.userCAAssessmentErr)
 	f.mu.Unlock()
-	started = true
 	for index := range sources {
 		go f.watchUpstreamList(active, index)
 	}
@@ -153,41 +125,13 @@ func (f *lifecycle) activate(ctx context.Context, directoryPath string, create b
 	}}, nil
 }
 
-func authorizeUpstreamListCreation(path string, request StartRequest) (bool, StartResult, error) {
-	consent := assessUpstreamListCreation(path)
-	if consent == nil {
-		return false, nil, nil
-	}
-	if request.UpstreamListCreationConsent == nil {
-		return false, StartUpstreamListCreationConsentRequired{Consent: *consent}, nil
-	}
-	input := request.UpstreamListCreationConsent
-	switch input.Decision {
-	case UpstreamListCreationDeclined:
-		return false, nil, nil
-	case UpstreamListCreationAccepted:
-		if input.Fingerprint != consent.Fingerprint {
-			return false, nil, fmt.Errorf("Upstream List creation consent does not match the current creation assessment")
-		}
-		return true, nil, nil
-	default:
-		return false, nil, fmt.Errorf("invalid Upstream List creation decision %q", input.Decision)
-	}
-}
-
 func withUpstreamListCreationWarning(result StartResult, err error) StartResult {
 	warning := &UpstreamListCreationWarningDetail{Cause: err.Error()}
 	switch typed := result.(type) {
 	case Started:
 		typed.UpstreamListCreationWarning = warning
 		return typed
-	case StartAlreadyMutating:
-		typed.UpstreamListCreationWarning = warning
-		return typed
-	case StartStopCancelled:
-		typed.UpstreamListCreationWarning = warning
-		return typed
-	case StartCleanupFailed:
+	case StartCancelled:
 		typed.UpstreamListCreationWarning = warning
 		return typed
 	default:

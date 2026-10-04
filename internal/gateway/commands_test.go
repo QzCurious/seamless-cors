@@ -3,7 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
-	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -34,70 +34,82 @@ func TestStopWithoutOwnerReturnsNotRunningAndRemovesStaleCache(t *testing.T) {
 	}
 }
 
-func TestOwnerlessInstallPublishesTransientOwnerAndFailsCompetingWorkFast(t *testing.T) {
-	useTestGatewayEnvironment(t)
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	ca := &fakeUserCA{
-		install: func(context.Context) (userCAState, error) {
-			close(entered)
-			<-release
-			return userCAState{}, nil
-		},
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := installCA(context.Background(), ca)
-		done <- err
-	}()
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("ownerless install did not begin")
-	}
-
-	target, err := discover()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target.kind != targetActive {
-		t.Fatalf("transient owner discovery = %s", target.kind)
-	}
-	status, err := target.client.Status(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.State != GatewayStatusRouterOnly || status.InstalledCA.Health != CAHealthMutating {
-		t.Fatalf("transient status = %#v", status)
-	}
-	start, err := target.client.Start(context.Background(), StartRequest{WorkingDirectory: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if start.Kind() != StartResultStartAlreadyMutating {
-		t.Fatalf("start during transient mutation = %#v", start)
-	}
-	competing, err := target.client.Install(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if competing.Kind != InstallResultAlreadyMutating {
-		t.Fatalf("competing install result = %#v", competing)
-	}
-
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	after, err := discover()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.kind != targetMissing {
-		t.Fatalf("transient owner remained discoverable: %s", after.kind)
-	}
-	if ca.inspectCalls != 0 {
-		t.Fatalf("transient owner inspected UserCA before its lifecycle operation: %d calls", ca.inspectCalls)
+func TestOfflineCAWorkExcludesCompetingCommandsWithoutPublishingControl(t *testing.T) {
+	for _, operation := range []string{"install", "uninstall"} {
+		t.Run(operation, func(t *testing.T) {
+			_, coord := useTestGatewayEnvironment(t)
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			defer unblock()
+			ca := &fakeUserCA{
+				install: func(context.Context) (userCAState, error) {
+					close(entered)
+					<-release
+					return userCAState{}, nil
+				},
+				uninstall: func(context.Context) error {
+					close(entered)
+					<-release
+					return nil
+				},
+			}
+			done := make(chan error, 1)
+			go func() {
+				var err error
+				if operation == "install" {
+					_, err = installCA(context.Background(), ca)
+				} else {
+					_, err = uninstallCA(context.Background(), ca, UninstallRequest{})
+				}
+				done <- err
+			}()
+			awaitSignal(t, entered)
+			if coord.Exists() {
+				t.Fatal("offline CA work published Gateway discovery state")
+			}
+			competingCA := &fakeUserCA{}
+			install, err := installCA(context.Background(), competingCA)
+			if err != nil || install.Kind != InstallResultOwnerTransition {
+				t.Fatalf("competing install = %#v, %v", install, err)
+			}
+			uninstall, err := uninstallCA(context.Background(), competingCA, UninstallRequest{})
+			if err != nil || uninstall.Kind != UninstallResultOwnerTransition {
+				t.Fatalf("competing uninstall = %#v, %v", uninstall, err)
+			}
+			start, err := start(context.Background(), nil, nil, StartHooks{})
+			if err != nil || start.Kind() != StartResultOwnerTransition {
+				t.Fatalf("competing start = %#v, %v", start, err)
+			}
+			settings := &lifecycleTestSystemSettings{}
+			status, err := status(context.Background(), settings, competingCA)
+			if err != nil || status.Kind != StatusResultOwnerTransition {
+				t.Fatalf("competing status = %#v, %v", status, err)
+			}
+			if _, err := stop(context.Background(), settings); err == nil || settings.cleared != 0 {
+				t.Fatalf("competing stop = %v, PAC cleanup calls = %d", err, settings.cleared)
+			}
+			if competingCA.inspectCalls != 0 || competingCA.installCalls != 0 || competingCA.uninstallCalls != 0 {
+				t.Fatal("competing command accessed UserCA without the instance lock")
+			}
+			unblock()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("offline CA operation did not finish")
+			}
+			lock, acquired, err := coord.TryAcquireOwnerLock()
+			if err != nil || !acquired {
+				t.Fatalf("offline CA work did not release instance lock: %t, %v", acquired, err)
+			}
+			defer lock.Release()
+			if ca.inspectCalls != 0 {
+				t.Fatalf("offline CA work performed an unrelated inspection: %d", ca.inspectCalls)
+			}
+		})
 	}
 }
 
@@ -181,8 +193,9 @@ func TestStopWithoutPublishedOwnerRejectsOwnerLockContention(t *testing.T) {
 
 	_, err = stop(context.Background(), settings)
 
-	if err == nil || !strings.Contains(err.Error(), "retry after it finishes") {
-		t.Fatalf("stop error = %v, want retryable ownership contention", err)
+	var busy *instanceBusyError
+	if !errors.As(err, &busy) {
+		t.Fatalf("stop error = %v, want retryable instance contention", err)
 	}
 	if settings.cleared != 0 {
 		t.Fatalf("System PAC cleanup calls = %d, want 0", settings.cleared)

@@ -58,18 +58,6 @@ func newRouterError(status int, message string, errs ...error) *gatewayErrorResp
 	}{Diagnostics: diagnostics})
 }
 
-type startSuccessBody struct {
-	Changed                     bool                               `json:"changed"`
-	Guidance                    *StartGuidance                     `json:"guidance,omitempty"`
-	UpstreamListCreationWarning *UpstreamListCreationWarningDetail `json:"upstreamListCreationWarning,omitempty"`
-}
-
-type startFailureDetails struct {
-	UpstreamListCreationConsent *UpstreamListCreationConsent       `json:"upstreamListCreationConsent,omitempty"`
-	UpstreamListCreationWarning *UpstreamListCreationWarningDetail `json:"upstreamListCreationWarning,omitempty"`
-	CleanupFailures             []CleanupFailure                   `json:"cleanupFailures,omitempty"`
-}
-
 type stopSuccessBody struct {
 	Changed            bool               `json:"changed"`
 	Warnings           []CommandWarning   `json:"warnings,omitempty"`
@@ -91,65 +79,6 @@ type uninstallSuccessBody struct{}
 type uninstallFailureDetails struct {
 	ConsentFingerprint string              `json:"consentFingerprint,omitempty"`
 	CleanupIssue       *UserCACleanupIssue `json:"cleanupIssue,omitempty"`
-}
-
-func startSuccessBodyFrom(result StartResult) startSuccessBody {
-	switch typed := result.(type) {
-	case Started:
-		guidance := typed.Guidance
-		return startSuccessBody{Changed: true, Guidance: &guidance, UpstreamListCreationWarning: typed.UpstreamListCreationWarning}
-	case AlreadyRunning:
-		return startSuccessBody{}
-	default:
-		return startSuccessBody{}
-	}
-}
-
-func (dto startSuccessBody) semantic() StartResult {
-	if !dto.Changed {
-		return AlreadyRunning{}
-	}
-	var guidance StartGuidance
-	if dto.Guidance != nil {
-		guidance = *dto.Guidance
-	}
-	return Started{Guidance: guidance, UpstreamListCreationWarning: dto.UpstreamListCreationWarning}
-}
-
-func startFailureDetailsFrom(result StartResult) startFailureDetails {
-	switch typed := result.(type) {
-	case StartUpstreamListCreationConsentRequired:
-		consent := typed.Consent
-		return startFailureDetails{UpstreamListCreationConsent: &consent}
-	case StartAlreadyMutating:
-		return startFailureDetails{UpstreamListCreationWarning: typed.UpstreamListCreationWarning}
-	case StartStopCancelled:
-		return startFailureDetails{UpstreamListCreationWarning: typed.UpstreamListCreationWarning}
-	case StartCleanupFailed:
-		return startFailureDetails{CleanupFailures: typed.Failures, UpstreamListCreationWarning: typed.UpstreamListCreationWarning}
-	default:
-		return startFailureDetails{}
-	}
-}
-
-func (dto startFailureDetails) semantic(kind StartKind) StartResult {
-	switch kind {
-	case StartResultUpstreamListCreationConsentRequired:
-		if dto.UpstreamListCreationConsent == nil {
-			return nil
-		}
-		return StartUpstreamListCreationConsentRequired{Consent: *dto.UpstreamListCreationConsent}
-	case StartResultOwnerTransition:
-		return StartOwnerTransition{}
-	case StartResultStartAlreadyMutating:
-		return StartAlreadyMutating{UpstreamListCreationWarning: dto.UpstreamListCreationWarning}
-	case StartResultStopCancelled:
-		return StartStopCancelled{UpstreamListCreationWarning: dto.UpstreamListCreationWarning}
-	case StartResultCleanupFailed:
-		return StartCleanupFailed{Failures: dto.CleanupFailures, UpstreamListCreationWarning: dto.UpstreamListCreationWarning}
-	default:
-		return nil
-	}
 }
 
 func stopSuccessBodyFrom(result StopResult) stopSuccessBody {

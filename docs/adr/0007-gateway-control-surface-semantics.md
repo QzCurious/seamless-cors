@@ -1,5 +1,7 @@
 # Gateway control-surface semantics
 
+Foreground process modes, startup, and repeated-start behavior are updated by [ADR-0014](./0014-foreground-gateway-management.md). Unaffected contracts below remain in force.
+
 The Gateway Module owns Surface-Neutral Command Results with operation-specific kinds, fixed fulfillment, structured detail, and ordinary errors only when no semantic result can be produced. CLI and authenticated HTTP Inbound Adapters translate those semantics into their own presentation without redefining command meaning or parsing diagnostic prose.
 
 The Gateway Router keeps HTTP representations private where transport changes semantic shape. Fulfilled operations use bare operation-specific success bodies; every non-success response uses one Gateway Error Response with a stable operation-scoped or Router-wide code, optional structured detail, and non-authoritative message.

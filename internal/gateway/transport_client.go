@@ -58,25 +58,6 @@ func newClient(cache stateCache) *client {
 	}
 }
 
-func (c *client) Start(ctx context.Context, request StartRequest) (StartResult, error) {
-	var success startSuccessBody
-	err := c.callJSON(ctx, http.MethodPost, "/start", request, &success)
-	if err == nil {
-		if success.Changed && success.Guidance == nil {
-			return nil, fmt.Errorf("/start returned a started result without guidance")
-		}
-		if !success.Changed && success.Guidance != nil {
-			return nil, fmt.Errorf("/start returned already-running with guidance")
-		}
-		return success.semantic(), nil
-	}
-	result, decodeErr := decodeCommandFailure(err, knownStartFailureKind, startFailureDetails.semantic)
-	if decodeErr == nil && result == nil {
-		return nil, fmt.Errorf("/start returned an incomplete failure result")
-	}
-	return result, decodeErr
-}
-
 func (c *client) Stop(ctx context.Context) (StopResult, error) {
 	var success stopSuccessBody
 	err := c.callJSON(ctx, http.MethodPost, "/stop", nil, &success)
@@ -202,19 +183,6 @@ func decodeCommandFailure[K ~string, D, R any](
 		return zero, err
 	}
 	return semantic(details, kind), nil
-}
-
-func knownStartFailureKind(kind StartKind) bool {
-	switch kind {
-	case StartResultOwnerTransition,
-		StartResultUpstreamListCreationConsentRequired,
-		StartResultStartAlreadyMutating,
-		StartResultStopCancelled,
-		StartResultCleanupFailed:
-		return true
-	default:
-		return false
-	}
 }
 
 func knownInstallFailureKind(kind InstallResultKind) bool {
