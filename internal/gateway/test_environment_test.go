@@ -40,7 +40,7 @@ func useTestGatewayEnvironment(t *testing.T) (string, *coordinator) {
 		}
 		xdg.Reload()
 	})
-	coord, err := defaultCoordinator()
+	coord, err := openCoordinator()
 	if err != nil {
 		t.Fatal(err)
 	}

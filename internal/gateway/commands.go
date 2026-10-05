@@ -33,7 +33,7 @@ func stop(ctx context.Context, pac systempac.Module) (StopResult, error) {
 	}
 
 	// Offline cleanup holds the same lock as startup and CA work.
-	coord, err := defaultCoordinator()
+	coord, err := openCoordinator()
 	if err != nil {
 		return StopResult{}, err
 	}
@@ -76,7 +76,7 @@ func status(ctx context.Context, pac systempac.Module, ca userCAModule) (StatusR
 			return StatusResult{}, err
 		}
 	}
-	coord, err := defaultCoordinator()
+	coord, err := openCoordinator()
 	if err != nil {
 		return StatusResult{}, err
 	}
@@ -186,7 +186,7 @@ func uninstallCA(ctx context.Context, ca userCAModule, request UninstallRequest)
 // lockForLocalCommand excludes startup and other offline work. If a Gateway
 // won the launch race, rediscover it once so the command can be forwarded.
 func lockForLocalCommand() (*ownerLock, *client, error) {
-	coord, err := defaultCoordinator()
+	coord, err := openCoordinator()
 	if err != nil {
 		return nil, nil, err
 	}

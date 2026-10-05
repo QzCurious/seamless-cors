@@ -32,7 +32,7 @@ type target struct {
 }
 
 func discover() (target, error) {
-	coord, err := defaultCoordinator()
+	coord, err := openCoordinator()
 	if err != nil {
 		return target{}, err
 	}

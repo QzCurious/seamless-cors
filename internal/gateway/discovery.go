@@ -35,16 +35,12 @@ type verification struct {
 
 type ownerVerifier func(stateCache) bool
 
-func defaultCoordinator() (*coordinator, error) {
-	runtimeDir, err := defaultRuntimeDir()
+func openCoordinator() (*coordinator, error) {
+	runtimeDir, err := resolveRuntimeDir(xdg.RuntimeFile)
 	if err != nil {
 		return nil, err
 	}
 	return newCoordinator(runtimeDir), nil
-}
-
-func defaultRuntimeDir() (string, error) {
-	return resolveRuntimeDir(xdg.RuntimeFile)
 }
 
 type runtimeFileResolver func(string) (string, error)

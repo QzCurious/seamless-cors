@@ -25,7 +25,7 @@ func start(ctx context.Context, pac systempac.Module, ca userCAModule, hooks Sta
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	coord, err := defaultCoordinator()
+	coord, err := openCoordinator()
 	if err != nil {
 		return nil, err
 	}
